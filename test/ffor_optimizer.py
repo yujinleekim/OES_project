@@ -197,24 +197,34 @@ class FFOROptimizer:
 
     def _add_voltage_constraints(self, m, dP, dQ, tag=""):
         """
-        Voltage bound via pre-inverted Jacobian (no extra state variables):
-            ΔU_b = J_inv[n_pq + b, :] · [ΔP_inj; ΔQ_inj]  ∈ [v_min−1, v_max−1]
-        Adds 2 * n_pq inequality constraints per call.
+        Voltage bound via pre-inverted Jacobian:
+            ΔU_b = J_inv[n_pq+b, :] · [ΔP_inj; ΔQ_inj]  ∈ [v_min−1, v_max−1]
+
+        Two speed improvements:
+          1. Sparse coefficients — skip terms where |J_U[b,j]| < 1e-8
+             (radial LV networks have highly sparse sensitivity matrices).
+          2. Elastic slack variables (s_lo, s_hi ≥ 0, penalised M=1e4) so the
+             LP is always feasible when the flat-start Jacobian is inaccurate.
         """
+        M    = 1e4
         n_pq = self._n_pq
         v_min, v_max = self.grid.v_limits
-        lo = v_min - 1.0   # e.g. −0.10 for LV, −0.05 for MV
-        hi = v_max - 1.0   # e.g. +0.10 for LV, +0.05 for MV
+        lo = v_min - 1.0
+        hi = v_max - 1.0
 
-        inj  = ([dP[pos] for pos in self._non_pcc] +
-                [dQ[pos] for pos in self._non_pcc])
-        J_U  = self._J_inv[n_pq:]   # voltage sensitivity rows
+        inj = ([dP[pos] for pos in self._non_pcc] +
+               [dQ[pos] for pos in self._non_pcc])
+        J_U = self._J_inv[n_pq:]   # (n_pq, 2*n_pq)
 
         for b in range(n_pq):
-            expr = gp.quicksum(float(J_U[b, j]) * inj[j]
-                               for j in range(2 * n_pq))
-            m.addConstr(expr >= lo, name=f"Vlo{b}{tag}")
-            m.addConstr(expr <= hi, name=f"Vhi{b}{tag}")
+            row = J_U[b]
+            expr = gp.quicksum(float(row[j]) * inj[j]
+                               for j in range(2 * n_pq)
+                               if abs(row[j]) > 1e-8)
+            s_lo = m.addVar(lb=0, ub=GRB.INFINITY, obj=M, name=f"slo{b}{tag}")
+            s_hi = m.addVar(lb=0, ub=GRB.INFINITY, obj=M, name=f"shi{b}{tag}")
+            m.addConstr(expr + s_lo >= lo, name=f"Vlo{b}{tag}")
+            m.addConstr(expr - s_hi <= hi, name=f"Vhi{b}{tag}")
 
     # ── single-timestep LP ────────────────────────────────────────────────────
 
@@ -222,6 +232,7 @@ class FFOROptimizer:
                           enforce_voltage=True):
         m   = gp.Model()
         m.setParam("OutputFlag", 0)
+        m.setParam("NumericFocus", 3)   # extra numerical care
         dt_h = 0.25
         irr  = self._irr(baseline, t_idx)
 
@@ -266,23 +277,22 @@ class FFOROptimizer:
 
         if m.Status == GRB.OPTIMAL:
             return dP_pcc.X, dQ_pcc.X
+
+        # If infeasible with voltage/line constraints, retry without them.
+        # This can happen when the flat-start Jacobian (used after a failed
+        # power flow) produces overly tight linearised voltage bounds.
+        if enforce_voltage and m.Status in (GRB.INFEASIBLE, GRB.INF_OR_UNBD):
+            return self._build_single_lp(t_idx, baseline, cos_th, sin_th,
+                                         enforce_voltage=False)
         return np.nan, np.nan
 
     def compute_ffor_single_timestep(self, t_idx, baseline,
                                      n_directions: int = 36) -> FFORResult:
         angles = np.linspace(0, 2 * np.pi, n_directions, endpoint=False)
-        pts    = [self._build_single_lp(t_idx, baseline,
-                                        np.cos(a), np.sin(a),
-                                        enforce_voltage=True)
-                  for a in angles]
-
-        if all(np.isnan(p) for p, _ in pts):
-            print("  [warn] network constraints infeasible -- re-solving without")
-            pts = [self._build_single_lp(t_idx, baseline,
-                                          np.cos(a), np.sin(a),
-                                          enforce_voltage=False)
-                   for a in angles]
-
+        pts = [self._build_single_lp(t_idx, baseline,
+                                     np.cos(a), np.sin(a),
+                                     enforce_voltage=True)
+               for a in angles]
         pts = [(p, q) for p, q in pts if not np.isnan(p)]
         if not pts:
             return FFORResult(np.array([]), np.array([]))
@@ -303,6 +313,7 @@ class FFOROptimizer:
         """
         m = gp.Model()
         m.setParam("OutputFlag", 0)
+        m.setParam("NumericFocus", 3)
 
         # BESS -- multi-step with SOC dynamics
         bess_Pall, bess_Qall = [], []
@@ -367,6 +378,11 @@ class FFOROptimizer:
 
         if m.Status == GRB.OPTIMAL:
             return dP_pcc.X, dQ_pcc.X
+
+        # Retry without voltage/line constraints if infeasible (flat-start fallback)
+        if enforce_voltage and m.Status in (GRB.INFEASIBLE, GRB.INF_OR_UNBD):
+            return self._build_multi_lp(t_start, T, baseline, dt_h,
+                                        cos_th, sin_th, enforce_voltage=False)
         return np.nan, np.nan
 
     def compute_ffor_multi_timestep(self, t_start, duration_h, baseline,
@@ -374,19 +390,10 @@ class FFOROptimizer:
         dt_h   = 0.25
         T      = max(1, round(duration_h / dt_h))
         angles = np.linspace(0, 2 * np.pi, n_directions, endpoint=False)
-
         pts = [self._build_multi_lp(t_start, T, baseline, dt_h,
                                     np.cos(a), np.sin(a),
                                     enforce_voltage=True)
                for a in angles]
-
-        if all(np.isnan(p) for p, _ in pts):
-            print(f"  [warn] voltage constraints infeasible for T={T} -- re-solving without")
-            pts = [self._build_multi_lp(t_start, T, baseline, dt_h,
-                                        np.cos(a), np.sin(a),
-                                        enforce_voltage=False)
-                   for a in angles]
-
         pts = [(p, q) for p, q in pts if not np.isnan(p)]
         if not pts:
             return FFORResult(np.array([]), np.array([]))

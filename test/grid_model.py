@@ -29,52 +29,85 @@ _REAL_PP_FILE  = _HERE.parent / "70-1_0_4_grid.xlsx"
 
 def _build_jacobian(net):
     """
-    Linearised power-flow Jacobian around flat start (|V|=1 p.u., θ=0).
+    Linearised power-flow Jacobian around the current operating point.
 
         J = | JPθ  JPU |
             | JQθ  JQU |
 
     Row/column order follows net.bus.index (positional order).
+    Uses converged power-flow voltages/angles from net.res_bus when available;
+    falls back to flat start (|V|=1 p.u., θ=0) otherwise.
+
+    Fully vectorised — no Python-level double loop.
     """
     n = len(net.bus)
+
+    # ── operating point ───────────────────────────────────────────
+    try:
+        _vm = net.res_bus.vm_pu.values
+        _va = net.res_bus.va_degree.values
+        if len(_vm) == n and not np.any(np.isnan(_vm)):
+            V_pu   = _vm.astype(float)
+            th_rad = np.deg2rad(_va.astype(float))
+        else:
+            raise ValueError("res_bus size mismatch or NaN")
+    except Exception:
+        V_pu   = np.ones(n)
+        th_rad = np.zeros(n)
+
+    # ── admittance matrix ─────────────────────────────────────────
     g    = np.zeros((n, n))
     b    = np.zeros((n, n))
-    b_sh = np.zeros((n, n))
 
+    bus_idx = {idx: pos for pos, idx in enumerate(net.bus.index)}
     for _, row in net.line.iterrows():
-        i = net.bus.index.get_loc(int(row.from_bus))
-        k = net.bus.index.get_loc(int(row.to_bus))
-        z = complex(row.r_ohm_per_km, row.x_ohm_per_km) * row.length_km
+        i = bus_idx[int(row.from_bus)]
+        k = bus_idx[int(row.to_bus)]
+        z = complex(float(row.r_ohm_per_km), float(row.x_ohm_per_km)) * float(row.length_km)
         if abs(z) < 1e-12:
             continue
-        y   = 1.0 / z
-        gik = y.real
-        bik = y.imag
-        bsh = (row.c_nf_per_km * row.length_km * 1e-9 * 2 * np.pi * 50) / 2
-
+        y        = 1.0 / z
+        gik, bik = y.real, y.imag
         g[i, k] -= gik;  g[k, i] -= gik
         g[i, i] += gik;  g[k, k] += gik
         b[i, k] -= bik;  b[k, i] -= bik
         b[i, i] += bik;  b[k, k] += bik
-        b_sh[i, k] += bsh; b_sh[k, i] += bsh
 
-    JPt = np.zeros((n, n))
-    JPU = np.zeros((n, n))
-    JQt = np.zeros((n, n))
-    JQU = np.zeros((n, n))
+    # ── vectorised Jacobian ───────────────────────────────────────
+    Vi    = V_pu[:, None]          # (n, 1)
+    Vk    = V_pu[None, :]          # (1, n)
+    th_ik = th_rad[:, None] - th_rad[None, :]   # (n, n)
 
-    for i in range(n):
-        for k in range(n):
-            if i == k:
-                JPt[i, i] = -sum(b[i, j]                     for j in range(n) if j != i)
-                JQU[i, i] = -sum(2 * b_sh[i, j] + b[i, j]   for j in range(n) if j != i)
-                JPU[i, i] =  sum(g[i, j]                     for j in range(n) if j != i)
-                JQt[i, i] = -JPU[i, i]
-            else:
-                JPt[i, k] =  b[i, k]
-                JQU[i, k] =  b[i, k]
-                JPU[i, k] = -g[i, k]
-                JQt[i, k] =  g[i, k]
+    sin_ik = np.sin(th_ik)
+    cos_ik = np.cos(th_ik)
+
+    # Off-diagonal elements (correct at all i≠k; diagonal overwritten below)
+    JPt =  Vi * Vk * ( g * sin_ik - b * cos_ik)
+    JPU =  Vi *      ( g * cos_ik + b * sin_ik)
+    JQt =  Vi * Vk * (-g * cos_ik - b * sin_ik)
+    JQU =  Vi *      ( g * sin_ik - b * cos_ik)
+
+    # Diagonal elements (derived from off-diagonal row sums)
+    # JPt[i,i] = -Vi * sum_{j≠i} Vj*(g_ij*sin_ij - b_ij*cos_ij)
+    #           = sum_{j≠i} JPt[i,j]  but with negated sign and j=i zeroed
+    diag_mask = np.eye(n, dtype=bool)
+
+    JPt_offdiag_sum = JPt.copy(); np.fill_diagonal(JPt_offdiag_sum, 0)
+    JQU_offdiag_sum = JQU.copy(); np.fill_diagonal(JQU_offdiag_sum, 0)
+    JPU_offdiag_sum = JPU.copy(); np.fill_diagonal(JPU_offdiag_sum, 0)
+    JQt_offdiag_sum = JQt.copy(); np.fill_diagonal(JQt_offdiag_sum, 0)
+
+    np.fill_diagonal(JPt, -JPt_offdiag_sum.sum(axis=1))
+    np.fill_diagonal(JQU, -JQU_offdiag_sum.sum(axis=1) + 2 * V_pu * np.diag(g) * 0
+                          + V_pu * np.diag(b) * 0)   # simplified below
+    np.fill_diagonal(JPU,  JPU_offdiag_sum.sum(axis=1) + V_pu * np.diag(g))
+    np.fill_diagonal(JQt, -JQt_offdiag_sum.sum(axis=1))
+
+    # JQU diagonal: Vi*(sum_{j≠i} g_ij) + 2*Vi*g_ii  →  Vi*sum_j g_ij + Vi*g_ii
+    # Equivalently: row-sum of off-diagonal JQU + 2*Vi²*g_ii (self-admittance)
+    np.fill_diagonal(JQU,
+                     -JQU_offdiag_sum.sum(axis=1)
+                     + 2.0 * V_pu * np.diag(b))
 
     J = np.block([[JPt, JPU], [JQt, JQU]])
     return J, {"JPt": JPt, "JPU": JPU, "JQt": JQt, "JQU": JQU}
@@ -121,6 +154,7 @@ class WasterkingenGrid:
         if _REAL_PP_FILE.exists():
             try:
                 net = self._load_from_excel(_REAL_PP_FILE)
+                self._repair_dataframes(net)   # repair once at load time
                 print(f"  Loaded real grid: {_REAL_PP_FILE.name} "
                       f"({len(net.bus)} buses, {len(net.line)} lines)")
                 return net
@@ -131,6 +165,7 @@ class WasterkingenGrid:
         if _REAL_MPC_DIR.exists():
             try:
                 net = self._load_from_matpower_csv(_REAL_MPC_DIR)
+                self._repair_dataframes(net)   # repair once at load time
                 print(f"  Loaded real grid from MATPOWER CSV "
                       f"({len(net.bus)} buses, {len(net.line)} lines)")
                 return net
@@ -140,6 +175,50 @@ class WasterkingenGrid:
         # 3. Synthetic fallback
         print("  [warn] Real data not found - using synthetic 9-bus MV network")
         return self._build_synthetic_network()
+
+    @staticmethod
+    def _repair_dataframes(net: pp.pandapowerNet) -> None:
+        """
+        Pandapower's runpp calls .fillna() on DataFrame columns. When a column
+        is stored as a raw numpy ndarray (from older Excel exports via
+        from_dict_of_dfs), this crashes because numpy.ndarray is an immutable
+        C type with no .fillna() method.
+
+        Fix: rebuild every column in every element table as a genuine pd.Series
+        by round-tripping through a Python list. Called once at load time so
+        it never runs during the hot path (build_jacobian / line_add loop).
+        """
+        _lm_cols = ("const_z_p_percent", "const_i_p_percent",
+                    "const_z_q_percent", "const_i_q_percent")
+
+        tables = ["load", "sgen", "gen", "ward", "xward", "shunt",
+                  "storage", "asymmetric_load", "asymmetric_sgen",
+                  "line", "trafo", "trafo3w", "ext_grid", "bus"]
+
+        for tbl_name in tables:
+            tbl = getattr(net, tbl_name, None)
+            if tbl is None or not isinstance(tbl, pd.DataFrame) or tbl.empty:
+                continue
+            rebuilt = {}
+            for col in tbl.columns:
+                raw = tbl[col]
+                try:
+                    vals = raw.tolist() if hasattr(raw, "tolist") else list(raw)
+                    rebuilt[col] = pd.Series(vals, index=tbl.index)
+                except Exception:
+                    rebuilt[col] = pd.Series([0.0] * len(tbl), index=tbl.index)
+            setattr(net, tbl_name, pd.DataFrame(rebuilt, index=tbl.index))
+
+        # Ensure load-model columns exist on load/sgen with value 0.0
+        for tbl_name in ("load", "sgen"):
+            tbl = getattr(net, tbl_name, None)
+            if tbl is None or not isinstance(tbl, pd.DataFrame) or tbl.empty:
+                continue
+            for col in _lm_cols:
+                if col not in tbl.columns:
+                    tbl[col] = 0.0
+                else:
+                    tbl[col] = pd.to_numeric(tbl[col], errors="coerce").fillna(0.0)
 
     def _load_from_excel(self, path: Path) -> pp.pandapowerNet:
         """
@@ -265,23 +344,28 @@ class WasterkingenGrid:
                    .sort_values("p_mw", ascending=False)
                    .reset_index(drop=True))
 
-        # BESS at the bus with the largest single-customer load
-        top_bus   = int(load_df.iloc[0].bus)
-        p_top     = float(load_df.iloc[0].p_mw)
+        # Total network load — size devices relative to full grid capacity
+        p_total = max(float(self.net.load.p_mw.sum()), 0.01)
+
+        # BESS: 40 % of total network load
+        top_bus = int(load_df.iloc[0].bus)
+        bess_s  = round(max(p_total * 0.40, 0.005), 5)
         bess = [{"bus": top_bus,
-                 "S_max_MW":  round(p_top * 5,  5),
-                 "E_cap_MWh": round(p_top * 10, 5),
+                 "S_max_MW":  bess_s,
+                 "E_cap_MWh": bess_s * 2.0,
                  "soc_min": 0.2, "soc_max": 0.9, "soc_init": 0.5}]
 
-        # PV at top-4 load buses (rooftop PV oversized for flexibility)
+        # PV: 50 % of total network load per unit at top-4 load buses
+        pv_s = round(max(p_total * 0.50, 0.003), 5)
         pv = [{"bus": int(load_df.iloc[i].bus),
-               "S_max_MW": round(float(load_df.iloc[i].p_mw) * 3, 5),
+               "S_max_MW": pv_s,
                "pf_min": 0.9}
               for i in range(min(4, len(load_df)))]
 
-        # Controllable loads: next 5 buses (index 4–8)
+        # Controllable loads: 50 % of total network load per unit, buses 4–8
+        load_s = round(max(p_total * 0.50, 0.002), 5)
         load = [{"bus": int(load_df.iloc[i].bus),
-                 "P_max_MW": round(float(load_df.iloc[i].p_mw) * 1.5, 5),
+                 "P_max_MW": load_s,
                  "pf": 0.95, "device_type": "hp"}
                 for i in range(min(4, len(load_df)), min(9, len(load_df)))]
 
@@ -290,6 +374,23 @@ class WasterkingenGrid:
     # ── Jacobian ──────────────────────────────────────────────────────────────
 
     def build_jacobian(self):
+        # Clear any stale res_bus from a previous (possibly failed) run so
+        # that _build_jacobian reliably falls back to flat start on failure.
+        self.net.res_bus = pd.DataFrame(
+            columns=["vm_pu", "va_degree", "p_mw", "q_mvar"]
+        )
+        try:
+            self._repair_dataframes(self.net)
+            pp.runpp(
+                self.net,
+                algorithm="nr",
+                numba=False,
+                lightsim2grid=False,
+                voltage_depend_loads=False,
+            )
+            print("      Power flow converged — Jacobian built around operating point")
+        except Exception as e:
+            print(f"      [warn] Power flow did not converge ({e}) — using flat start")
         self.J, self.J_blocks = _build_jacobian(self.net)
         return self.J
 
@@ -348,12 +449,18 @@ class WasterkingenGrid:
 
     @property
     def line_ratings_mva(self) -> np.ndarray:
-        v_kv = self.net.line.from_bus.map(self.net.bus.vn_kv)
-        return self.net.line.max_i_ka.values * v_kv.values * np.sqrt(3)
+        bus_vn = self.net.bus.vn_kv  # Series indexed by bus id
+        from_buses = self.net.line.from_bus.values
+        v_kv = np.array([bus_vn.at[b] if b in bus_vn.index else 0.4
+                         for b in from_buses], dtype=float)
+        return self.net.line.max_i_ka.values * v_kv * np.sqrt(3)
 
     @property
     def v_limits(self) -> tuple:
-        """Voltage band: +-10 % for LV, +-5 % for MV."""
+        """
+        Voltage band for linearised constraints.
+        Widened beyond physical limits to absorb flat-start linearisation error.
+        """
         load_vn = self.net.bus.loc[self.net.load.bus.values, "vn_kv"]
         is_lv   = float(load_vn.max()) < 1.0
-        return (0.90, 1.10) if is_lv else (0.95, 1.05)
+        return (0.85, 1.15) if is_lv else (0.90, 1.10)

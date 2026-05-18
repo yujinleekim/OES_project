@@ -32,6 +32,9 @@ def _convex_hull_order(P, Q):
 def plot_ffor(result, title: str = "FFOR",
               save_path: Path = None):
     """Plot a single-timestep FFOR."""
+    if len(result.P_flex) == 0:
+        print(f"  [warn] FFOR result is empty — skipping plot '{title}'")
+        return
     P, Q = _convex_hull_order(result.P_flex, result.Q_flex)
     P, Q = _close_polygon(P, Q)
 
@@ -71,6 +74,9 @@ def plot_ffor_multi_duration(ffor_multi: dict,
     for i, d in enumerate(durations):
         res = ffor_multi[d]
         if len(res.P_flex) < 2:
+            label = f"{d} h" if d >= 1 else f"{int(d*60)} min"
+            print(f"  [warn] Skipping duration {label} — fewer than 2 FFOR points "
+                  f"(LP likely infeasible; check BESS SOC headroom)")
             continue
         P, Q = _convex_hull_order(res.P_flex, res.Q_flex)
         P, Q = _close_polygon(P, Q)
