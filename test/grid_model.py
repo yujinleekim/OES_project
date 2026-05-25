@@ -90,8 +90,6 @@ def _build_jacobian(net):
     # Diagonal elements (derived from off-diagonal row sums)
     # JPt[i,i] = -Vi * sum_{j≠i} Vj*(g_ij*sin_ij - b_ij*cos_ij)
     #           = sum_{j≠i} JPt[i,j]  but with negated sign and j=i zeroed
-    diag_mask = np.eye(n, dtype=bool)
-
     JPt_offdiag_sum = JPt.copy(); np.fill_diagonal(JPt_offdiag_sum, 0)
     JQU_offdiag_sum = JQU.copy(); np.fill_diagonal(JQU_offdiag_sum, 0)
     JPU_offdiag_sum = JPU.copy(); np.fill_diagonal(JPU_offdiag_sum, 0)
@@ -170,11 +168,12 @@ class WasterkingenGrid:
                       f"({len(net.bus)} buses, {len(net.line)} lines)")
                 return net
             except Exception as e:
-                print(f"  [warn] MATPOWER CSV load failed ({e}), using synthetic ...")
+                print(f"  [warn] MATPOWER CSV load failed ({e})")
 
-        # 3. Synthetic fallback
-        print("  [warn] Real data not found - using synthetic 9-bus MV network")
-        return self._build_synthetic_network()
+        raise FileNotFoundError(
+            f"No grid data found. Expected Excel at '{_REAL_PP_FILE}' "
+            f"or MATPOWER CSV at '{_REAL_MPC_DIR}'."
+        )
 
     @staticmethod
     def _repair_dataframes(net: pp.pandapowerNet) -> None:
@@ -285,59 +284,10 @@ class WasterkingenGrid:
 
         return net
 
-    def _build_synthetic_network(self) -> pp.pandapowerNet:
-        """9-bus MV synthetic fallback (original sketch)."""
-        net = pp.create_empty_network(f_hz=50, sn_mva=10)
-        vn  = 16.0
-        for i in range(9):
-            pp.create_bus(net, vn_kv=vn, name=f"Bus {i}")
-        pp.create_ext_grid(net, bus=0, vm_pu=1.0, va_degree=0.0,
-                           name="HV/MV Transformer")
-        pp.create_sgen(net, bus=1, p_mw=0.5, q_mvar=0.0, name="Gen1_RoR")
-        pp.create_sgen(net, bus=2, p_mw=0.3, q_mvar=0.0, name="Gen2_RoR")
-        pp.create_sgen(net, bus=3, p_mw=0.0, q_mvar=0.0, name="BESS")
-        pp.create_load(net, bus=4, p_mw=1.0, q_mvar=0.10, name="Load_A")
-        pp.create_load(net, bus=5, p_mw=0.7, q_mvar=0.07, name="Load_B")
-        pp.create_load(net, bus=6, p_mw=0.5, q_mvar=0.05, name="Load_C")
-        pp.create_load(net, bus=7, p_mw=0.8, q_mvar=0.08, name="Load_D")
-        pp.create_load(net, bus=8, p_mw=0.4, q_mvar=0.04, name="Load_E")
-        for fb, tb, length in [(0,1,2.0),(0,4,3.0),(1,2,1.5),(1,5,2.5),
-                                (2,3,1.0),(3,6,2.0),(4,7,1.8),(5,8,2.2)]:
-            pp.create_line_from_parameters(
-                net, from_bus=fb, to_bus=tb, length_km=length,
-                r_ohm_per_km=0.5, x_ohm_per_km=0.4,
-                c_nf_per_km=10.0, max_i_ka=0.2,
-                name=f"Line_{fb}-{tb}")
-        return net
-
     # ── device placement ──────────────────────────────────────────────────────
 
     def _make_device_data(self):
-        """
-        Derive device placement from the loaded network.
-
-        LV real grid: selects top-load buses; scales device ratings to LV level.
-        MV synthetic:  returns the original hardcoded values.
-        """
-        # Use load-bus voltages: real LV grids have loads at < 1 kV even if an
-        # MV slack bus exists (e.g. transformer HV side at 20 kV).
-        load_vn = self.net.bus.loc[self.net.load.bus.values, "vn_kv"]
-        is_lv   = float(load_vn.max()) < 1.0
-
-        if not is_lv:
-            bess = [{"bus": 3, "S_max_MW": 4.0, "E_cap_MWh": 5.0,
-                     "soc_min": 0.4, "soc_max": 0.8, "soc_init": 0.6}]
-            pv   = [{"bus": 4, "S_max_MW": 0.5, "pf_min": 0.9},
-                    {"bus": 5, "S_max_MW": 0.3, "pf_min": 0.9},
-                    {"bus": 6, "S_max_MW": 0.8, "pf_min": 0.9},
-                    {"bus": 7, "S_max_MW": 0.2, "pf_min": 0.9}]
-            load = [{"bus": 4, "P_max_MW": 1.2, "pf": 0.95, "device_type": "hp"},
-                    {"bus": 5, "P_max_MW": 0.8, "pf": 0.95, "device_type": "hp"},
-                    {"bus": 6, "P_max_MW": 0.6, "pf": 0.95, "device_type": "boiler"},
-                    {"bus": 7, "P_max_MW": 0.9, "pf": 0.95, "device_type": "hp"},
-                    {"bus": 8, "P_max_MW": 0.5, "pf": 0.95, "device_type": "hp"}]
-            return bess, pv, load
-
+        """Derive device placement from the loaded LV network."""
         # Real LV: sort load buses by peak demand
         load_df = (self.net.load[self.net.load.bus != self.pcc_bus]
                    .copy()
@@ -457,10 +407,5 @@ class WasterkingenGrid:
 
     @property
     def v_limits(self) -> tuple:
-        """
-        Voltage band for linearised constraints.
-        Widened beyond physical limits to absorb flat-start linearisation error.
-        """
-        load_vn = self.net.bus.loc[self.net.load.bus.values, "vn_kv"]
-        is_lv   = float(load_vn.max()) < 1.0
-        return (0.85, 1.15) if is_lv else (0.90, 1.10)
+        """Voltage band for linearised constraints (widened to absorb flat-start error)."""
+        return (0.85, 1.15)
