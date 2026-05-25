@@ -22,7 +22,7 @@ from utils import plot_ffor, plot_ffor_multi_duration
 from line_add import find_optimal_line_addition, plot_ffor_comparison
  
 # ── paths ────────────────────────────────────────────────────────────────────
-DATA_DIR = Path("data")
+DATA_DIR = Path(__file__).parent.parent   # project root, where 70-1_0_4_grid.xlsx lives
 OUTPUT_DIR = Path("results")
 OUTPUT_DIR.mkdir(exist_ok=True)
  

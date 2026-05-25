@@ -71,9 +71,10 @@ class FFOROptimizer:
         Columns 0..n_pq-1      → sensitivity to ΔP injections (non-PCC order)
         Columns n_pq..2*n_pq-1 → sensitivity to ΔQ injections (non-PCC order)
         """
-        net    = self.grid.net
-        n_pq   = self._n_pq
-        n_lines = len(net.line)
+        line_df = self.grid.line_df
+        bus_df  = self.grid.bus_df
+        n_pq    = self._n_pq
+        n_lines = len(line_df)
         non_pcc = self._non_pcc
 
         # fast lookup: positional bus index → index within non_pcc (-1 for PCC)
@@ -83,10 +84,10 @@ class FFOROptimizer:
 
         H = np.zeros((2 * n_lines, 2 * n_pq))
 
-        for l, (_, row) in enumerate(net.line.iterrows()):
-            fb = net.bus.index.get_loc(int(row.from_bus))
-            tb = net.bus.index.get_loc(int(row.to_bus))
-            z  = complex(row.r_ohm_per_km, row.x_ohm_per_km) * row.length_km
+        for l, (_, row) in enumerate(line_df.iterrows()):
+            fb = bus_df.index.get_loc(int(row['from_bus']))
+            tb = bus_df.index.get_loc(int(row['to_bus']))
+            z  = complex(float(row['r_ohm_per_km']), float(row['x_ohm_per_km'])) * float(row['length_km'])
             if abs(z) < 1e-12:
                 continue
             y        = 1.0 / z
@@ -123,7 +124,7 @@ class FFOROptimizer:
         Constrains the *deviation* from the baseline flow (same convention
         as the voltage constraints in _add_voltage_constraints).
         """
-        n_lines  = len(self.grid.net.line)
+        n_lines  = len(self.grid.line_df)
         n_pq     = self._n_pq
         n_sides  = 8
         angles   = np.linspace(0, 2 * np.pi, n_sides, endpoint=False)
@@ -221,8 +222,8 @@ class FFOROptimizer:
             expr = gp.quicksum(float(row[j]) * inj[j]
                                for j in range(2 * n_pq)
                                if abs(row[j]) > 1e-8)
-            s_lo = m.addVar(lb=0, ub=GRB.INFINITY, obj=M, name=f"slo{b}{tag}")
-            s_hi = m.addVar(lb=0, ub=GRB.INFINITY, obj=M, name=f"shi{b}{tag}")
+            s_lo = m.addVar(lb=0, ub=GRB.INFINITY, obj=-M, name=f"slo{b}{tag}")
+            s_hi = m.addVar(lb=0, ub=GRB.INFINITY, obj=-M, name=f"shi{b}{tag}")
             m.addConstr(expr + s_lo >= lo, name=f"Vlo{b}{tag}")
             m.addConstr(expr - s_hi <= hi, name=f"Vhi{b}{tag}")
 
