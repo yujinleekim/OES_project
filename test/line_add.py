@@ -94,7 +94,7 @@ def _candidate_pairs(bus_df: pd.DataFrame, line_df: pd.DataFrame,
             candidates.append((u, v))
     return candidates
 
-
+'''
 def _score_candidates(candidates: list, J_inv: np.ndarray,
                       non_pcc_positions: list, top_n: int = 20) -> list:
     """
@@ -121,7 +121,8 @@ def _score_candidates(candidates: list, J_inv: np.ndarray,
     scored.sort(key=lambda x: x[0], reverse=True)
     return [(u, v) for _, u, v in scored[:top_n]]
 
-
+'''
+''' 
 def _top_significant_buses(J_inv: np.ndarray,
                            non_pcc_positions: list,
                            top_n: int = 20) -> list:
@@ -137,7 +138,7 @@ def _top_significant_buses(J_inv: np.ndarray,
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [bus for _, bus in scored[:top_n]]
-
+'''
 
 def _median_line_params(line_df: pd.DataFrame) -> dict:
     """Extract representative per-km line parameters from the existing network."""

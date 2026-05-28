@@ -156,26 +156,34 @@ class WasterkingenGrid:
 
         # BESS: 40 % of total network load, 8-h energy capacity
         top_bus = int(load_df_sorted.iloc[0]['bus'])
-        bess_s  = round(max(p_total * 0.40, 0.005), 5)
+        #bess_s  = round(max(p_total * 0.40, 0.005), 5)
+        bess_s  = round(max(p_total * 0.1, 0.005), 5)
         bess = [{"bus": top_bus,
                  "S_max_MW":  bess_s,
                  "E_cap_MWh": bess_s * 8.0,
                  "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5}]
-
+        
         # PV: 50 % of total network load at top-4 load buses
-        pv_s = round(max(p_total * 0.50, 0.003), 5)
+        pv_s = round(max(p_total * 0.7, 0.1), 5)
+        ''' 
         pv = [{"bus": int(load_df_sorted.iloc[i]['bus']),
                "S_max_MW": pv_s,
                "pf_min": 0.9}
               for i in range(min(4, len(load_df_sorted)))]
+        ''' 
+        pv = [{"bus": int(load_df_sorted.iloc[i]['bus']),
+               "S_max_MW": pv_s,
+               "pf_min": 0.9}
+              for i in range(min(10, len(load_df_sorted)))]        
 
         # Controllable loads: 50 % of total network load, next 5 buses
-        load_s = round(max(p_total * 0.50, 0.002), 5)
+        #load_s = round(max(p_total * 0.50, 0.002), 5)
+        load_s = round(max(p_total * 0.01, 0.002), 5)
         load = [{"bus": int(load_df_sorted.iloc[i]['bus']),
                  "P_max_MW": load_s,
                  "pf": 0.95, "device_type": "hp"}
                 for i in range(min(4, len(load_df_sorted)), min(9, len(load_df_sorted)))]
-
+        
         return bess, pv, load
 
     # ── Jacobian ──────────────────────────────────────────────────────────────

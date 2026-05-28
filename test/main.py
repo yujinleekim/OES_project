@@ -70,7 +70,7 @@ def main():
     )
  
     # --- multi-timestep FFOR for several sustained durations ---
-    durations_h = [0.25, 0.5, 1, 2, 4, 8]
+    durations_h = [0.25, 0.5, 1]
     ffor_multi = {}
     for d in durations_h:
         print(f"   Duration {d} h ...")
@@ -92,7 +92,7 @@ def main():
         t_idx          = t_idx,
         n_directions   = 36,
         length_km      = 0.1,      # assumed cable length [km]
-        top_bus_count  = 20,       # evaluate only the 20 most significant buses first
+        #top_bus_count  = 20,       # evaluate only the 20 most significant buses first
         verbose        = True,
     )
  

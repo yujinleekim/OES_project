@@ -117,13 +117,13 @@ class FFOROptimizer:
     def _add_line_constraints(self, m: gp.Model, dP: dict, dQ: dict,
                               tag: str = "") -> None:
         """
-        Add line thermal constraints via AC PTDF.
+        Add line thermal constraints via AC PTDF with elastic slack variables.
 
-        Approximates  ΔP_l² + ΔQ_l² ≤ S_max_l²  with a regular 8-gon,
-        consistent with how the BESS apparent-power circle is linearised.
-        Constrains the *deviation* from the baseline flow (same convention
-        as the voltage constraints in _add_voltage_constraints).
+        Soft constraint: nx*dPl + ny*dQl - slack <= rhs  (slack >= 0, penalised)
+        Same penalty M as voltage constraints so both are weighted equally.
+        Always feasible — violations are penalised, not forbidden.
         """
+        M        = 1e4
         n_lines  = len(self.grid.line_df)
         n_pq     = self._n_pq
         n_sides  = 8
@@ -148,7 +148,9 @@ class FFOROptimizer:
                 nx  = np.cos((a1 + a2) / 2)
                 ny  = np.sin((a1 + a2) / 2)
                 rhs = s_l * np.cos((a2 - a1) / 2)
-                m.addConstr(nx * dPl + ny * dQl <= rhs,
+                slk = m.addVar(lb=0, ub=GRB.INFINITY, obj=-M,
+                               name=f"sLn{l}e{k}{tag}")
+                m.addConstr(nx * dPl + ny * dQl - slk <= rhs,
                             name=f"Ln{l}e{k}{tag}")
 
     def _irr(self, baseline, t):
@@ -229,8 +231,7 @@ class FFOROptimizer:
 
     # ── single-timestep LP ────────────────────────────────────────────────────
 
-    def _build_single_lp(self, t_idx, baseline, cos_th, sin_th,
-                          enforce_voltage=True):
+    def _build_single_lp(self, t_idx, baseline, cos_th, sin_th):
         m   = gp.Model()
         m.setParam("OutputFlag", 0)
         m.setParam("NumericFocus", 3)   # extra numerical care
@@ -269,30 +270,21 @@ class FFOROptimizer:
         dP_pcc = m.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name="dP_pcc")
         dQ_pcc = m.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name="dQ_pcc")
         self._add_pcc_balance(m, dP, dQ, dP_pcc, dQ_pcc)
-        if enforce_voltage:
-            self._add_voltage_constraints(m, dP, dQ)
-            self._add_line_constraints(m, dP, dQ)
+        self._add_voltage_constraints(m, dP, dQ)
+        self._add_line_constraints(m, dP, dQ)
 
         m.setObjective(cos_th * dP_pcc + sin_th * dQ_pcc, GRB.MAXIMIZE)
         m.optimize()
 
         if m.Status == GRB.OPTIMAL:
             return dP_pcc.X, dQ_pcc.X
-
-        # If infeasible with voltage/line constraints, retry without them.
-        # This can happen when the flat-start Jacobian (used after a failed
-        # power flow) produces overly tight linearised voltage bounds.
-        if enforce_voltage and m.Status in (GRB.INFEASIBLE, GRB.INF_OR_UNBD):
-            return self._build_single_lp(t_idx, baseline, cos_th, sin_th,
-                                         enforce_voltage=False)
         return np.nan, np.nan
 
     def compute_ffor_single_timestep(self, t_idx, baseline,
                                      n_directions: int = 36) -> FFORResult:
         angles = np.linspace(0, 2 * np.pi, n_directions, endpoint=False)
         pts = [self._build_single_lp(t_idx, baseline,
-                                     np.cos(a), np.sin(a),
-                                     enforce_voltage=True)
+                                     np.cos(a), np.sin(a))
                for a in angles]
         pts = [(p, q) for p, q in pts if not np.isnan(p)]
         if not pts:
@@ -303,7 +295,7 @@ class FFOROptimizer:
     # ── multi-timestep LP ─────────────────────────────────────────────────────
 
     def _build_multi_lp(self, t_start, T, baseline, dt_h,
-                         cos_th, sin_th, enforce_voltage=True):
+                         cos_th, sin_th):
         """
         Sustained-flexibility LP over T timesteps.
         BESS: full SOC dynamics.
@@ -370,20 +362,14 @@ class FFOROptimizer:
                 baseline, t_abs,
             )
             self._add_pcc_balance(m, dP, dQ, dP_pcc, dQ_pcc, tag=str(t))
-            if enforce_voltage:
-                self._add_voltage_constraints(m, dP, dQ, tag=f"t{t}")
-                self._add_line_constraints(m, dP, dQ, tag=f"t{t}")
+            self._add_voltage_constraints(m, dP, dQ, tag=f"t{t}")
+            self._add_line_constraints(m, dP, dQ, tag=f"t{t}")
 
         m.setObjective(cos_th * dP_pcc + sin_th * dQ_pcc, GRB.MAXIMIZE)
         m.optimize()
 
         if m.Status == GRB.OPTIMAL:
             return dP_pcc.X, dQ_pcc.X
-
-        # Retry without voltage/line constraints if infeasible (flat-start fallback)
-        if enforce_voltage and m.Status in (GRB.INFEASIBLE, GRB.INF_OR_UNBD):
-            return self._build_multi_lp(t_start, T, baseline, dt_h,
-                                        cos_th, sin_th, enforce_voltage=False)
         return np.nan, np.nan
 
     def compute_ffor_multi_timestep(self, t_start, duration_h, baseline,
@@ -392,8 +378,7 @@ class FFOROptimizer:
         T      = max(1, round(duration_h / dt_h))
         angles = np.linspace(0, 2 * np.pi, n_directions, endpoint=False)
         pts = [self._build_multi_lp(t_start, T, baseline, dt_h,
-                                    np.cos(a), np.sin(a),
-                                    enforce_voltage=True)
+                                    np.cos(a), np.sin(a))
                for a in angles]
         pts = [(p, q) for p, q in pts if not np.isnan(p)]
         if not pts:
