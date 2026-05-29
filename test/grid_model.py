@@ -1,11 +1,5 @@
 """
 grid_model.py
-─────────────
-Wasterkingen LV distribution grid (Swiss-PDGs dataset, grid ID: 70-1_0_4).
-  - Loads real grid data directly from the .xlsx file via Pandas (no Pandapower)
-  - Builds the linearised power-flow Jacobian J = [JPθ JPU; JQθ JQU] analytically
-  - Auto-derives BESS / PV / controllable-load placement from the network
-  - Generates synthetic baseline time series scaled to actual load level
 """
 
 import numpy as np
@@ -13,237 +7,163 @@ import pandas as pd
 from pathlib import Path
 from devices import BESSModel, PVModel, ControllableLoadModel
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Jacobian helper (Analytic / Flat Start)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _build_jacobian(bus_df: pd.DataFrame, line_df: pd.DataFrame):
-    """
-    Linearised power-flow Jacobian evaluated at a flat start (|V|=1.0 p.u., θ=0).
-
-        J = | JPθ  JPU |
-            | JQθ  JQU |
-
-    Fully vectorised -- no Python-level double loop.
-    """
     n = len(bus_df)
-
-    V_pu   = np.ones(n)
-    th_rad = np.zeros(n)
-
-    g = np.zeros((n, n))
-    b = np.zeros((n, n))
-
+    V_pu, th_rad = np.ones(n), np.zeros(n)
+    g, b = np.zeros((n, n)), np.zeros((n, n))
     bus_idx = {idx: pos for pos, idx in enumerate(bus_df.index)}
 
     for _, row in line_df.iterrows():
-        if 'in_service' in row and not row['in_service']:
-            continue
-        i = bus_idx[int(row['from_bus'])]
-        k = bus_idx[int(row['to_bus'])]
-        z = complex(float(row['r_ohm_per_km']), float(row['x_ohm_per_km'])) * float(row['length_km'])
-        if abs(z) < 1e-12:
-            continue
-        y        = 1.0 / z
+        if 'in_service' in row and not row['in_service']: continue
+        i, k = bus_idx[int(row['from_bus'])], bus_idx[int(row['to_bus'])]
+        Z_base_ohm = (0.4 ** 2) / 1.0
+        
+        length = max(float(row.get('length_km', 0.001)), 0.001)
+        r_ohm = max(float(row.get('r_ohm_per_km', 0.001)), 0.001) * length
+        x_ohm = max(float(row.get('x_ohm_per_km', 0.001)), 0.001) * length
+        
+        z = complex(r_ohm, x_ohm) / Z_base_ohm
+        y = 1.0 / z
         gik, bik = y.real, y.imag
         g[i, k] -= gik;  g[k, i] -= gik
         g[i, i] += gik;  g[k, k] += gik
         b[i, k] -= bik;  b[k, i] -= bik
         b[i, i] += bik;  b[k, k] += bik
 
-    Vi    = V_pu[:, None]
-    Vk    = V_pu[None, :]
-    th_ik = th_rad[:, None] - th_rad[None, :]
-
-    sin_ik = np.sin(th_ik)
-    cos_ik = np.cos(th_ik)
-
-    JPt =  Vi * Vk * ( g * sin_ik - b * cos_ik)
-    JPU =  Vi *      ( g * cos_ik + b * sin_ik)
-    JQt =  Vi * Vk * (-g * cos_ik - b * sin_ik)
-    JQU =  Vi *      ( g * sin_ik - b * cos_ik)
-
-    JPt_offdiag_sum = JPt.copy(); np.fill_diagonal(JPt_offdiag_sum, 0)
-    JQU_offdiag_sum = JQU.copy(); np.fill_diagonal(JQU_offdiag_sum, 0)
-    JPU_offdiag_sum = JPU.copy(); np.fill_diagonal(JPU_offdiag_sum, 0)
-    JQt_offdiag_sum = JQt.copy(); np.fill_diagonal(JQt_offdiag_sum, 0)
-
-    np.fill_diagonal(JPt, -JPt_offdiag_sum.sum(axis=1))
-    np.fill_diagonal(JQU, -JQU_offdiag_sum.sum(axis=1) + 2.0 * V_pu * np.diag(b))
-    np.fill_diagonal(JPU,  JPU_offdiag_sum.sum(axis=1) + V_pu * np.diag(g))
-    np.fill_diagonal(JQt, -JQt_offdiag_sum.sum(axis=1))
+    JPt, JPU = -b.copy(), g.copy()
+    JQt, JQU = -g.copy(), -b.copy()
 
     J = np.block([[JPt, JPU], [JQt, JQU]])
     return J, {"JPt": JPt, "JPU": JPU, "JQt": JQt, "JQU": JQU}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Grid class
-# ─────────────────────────────────────────────────────────────────────────────
-
 class WasterkingenGrid:
-    """
-    Wasterkingen distribution grid.
-    Loads real LV data directly from the .xlsx file (no Pandapower).
-    """
-
-    def __init__(self, data_dir: Path = Path(__file__).parent.parent):
+    def __init__(self, data_dir: Path = Path(__file__).parent.parent, interactive=False):
         self.data_dir = Path(data_dir)
-
         self.bus_df, self.line_df, self.load_df, self.ext_grid_df = self._load_dataframes()
+        self.pcc_bus = int(self.ext_grid_df['bus'].iloc[0])
+
+        import networkx as nx
+        G = nx.Graph()
+        for _, r in self.line_df.iterrows():
+            G.add_edge(int(r['from_bus']), int(r['to_bus']))
+        
+        if self.pcc_bus in G:
+            connected = set(nx.node_connected_component(G, self.pcc_bus))
+        else:
+            connected = max(list(nx.connected_components(G)), key=len)
+            self.pcc_bus = list(connected)[0]
+            
+        self.bus_df = self.bus_df[self.bus_df.index.isin(connected)].copy()
+        self.line_df = self.line_df[self.line_df['from_bus'].isin(connected) & self.line_df['to_bus'].isin(connected)].copy()
+        self.load_df = self.load_df[self.load_df['bus'].isin(connected)].copy()
 
         self.n_buses = len(self.bus_df)
         self.n_lines = len(self.line_df)
-        self.pcc_bus = int(self.ext_grid_df['bus'].iloc[0])
+        self.J, self.J_blocks = None, None
+        self._BESS_DATA, self._PV_DATA, self._LOAD_DATA = self._make_device_data(interactive=interactive)
 
-        self.J        = None
-        self.J_blocks = None
-
-        self._BESS_DATA, self._PV_DATA, self._LOAD_DATA = self._make_device_data()
-
-    # ── bus index helpers ─────────────────────────────────────────────────────
-
-    def bus_pos(self, bus_idx: int) -> int:
-        """Bus index → row/column position in the Jacobian matrix."""
-        return self.bus_df.index.get_loc(bus_idx)
-
+    def bus_pos(self, bus_idx: int) -> int: return self.bus_df.index.get_loc(bus_idx)
     @property
-    def pcc_pos(self) -> int:
-        """Positional index of the PCC (slack) bus in the Jacobian."""
-        return self.bus_pos(self.pcc_bus)
-
-    # ── network loading ───────────────────────────────────────────────────────
+    def pcc_pos(self) -> int: return self.bus_pos(self.pcc_bus)
 
     def _load_dataframes(self):
-        """Load bus, line, load, and ext_grid tables directly from Excel."""
         excel_path = self.data_dir / "70-1_0_4_grid.xlsx"
-
-        if not excel_path.exists():
-            raise FileNotFoundError(
-                f"Grid data not found at '{excel_path.absolute()}'. "
-                "Expected the 70-1_0_4_grid.xlsx file in the project root."
-            )
-
-        print(f"  Loaded real grid directly from {excel_path.name}")
-        dfs = pd.read_excel(
-            excel_path,
-            sheet_name=['bus', 'line', 'load', 'ext_grid'],
-            index_col=0,
-            engine="openpyxl",
-        )
-
-        bus_df      = dfs['bus']
-        line_df     = dfs['line']
-        load_df     = dfs['load']
-        ext_grid_df = dfs['ext_grid']
-
-        if 'in_service' in line_df.columns:
-            line_df = line_df[line_df['in_service'] == True].copy()
-
+        dfs = pd.read_excel(excel_path, sheet_name=['bus', 'line', 'load', 'ext_grid'], index_col=0, engine="openpyxl")
+        bus_df, line_df, load_df, ext_grid_df = dfs['bus'], dfs['line'], dfs['load'], dfs['ext_grid']
+        if 'in_service' in line_df.columns: line_df = line_df[line_df['in_service'] == True].copy()
         return bus_df, line_df, load_df, ext_grid_df
 
-    # ── device placement ──────────────────────────────────────────────────────
+    def _make_device_data(self, n_bess=2, n_pv=10, n_loads=20, interactive=False):
+        import networkx as nx
+        G = nx.Graph()
+        for _, r in self.line_df.iterrows(): 
+            G.add_edge(int(r['from_bus']), int(r['to_bus']))
+        
+        leaf_nodes = [node for node, degree in G.degree() if degree == 1 and node != self.pcc_bus]
+        if not leaf_nodes: 
+            leaf_nodes = [n for n in G.nodes() if n != self.pcc_bus] or [self.pcc_bus]
 
-    def _make_device_data(self):
-        """Derive device placement from the loaded LV network."""
-        load_df_sorted = (self.load_df[self.load_df['bus'] != self.pcc_bus]
-                          .copy()
-                          .sort_values("p_mw", ascending=False)
-                          .reset_index(drop=True))
+        # Statt einfach nur alle Leaves zu nehmen:
+        leaf_nodes = sorted(leaf_nodes, key=lambda x: nx.shortest_path_length(G, x, self.pcc_bus), reverse=True)
+        print(f"\n--- Geräte-Konfiguration ---")
+        mode = input(f"Automatische Platzierung wählen? (y/n) [Standard: y]: ").lower().strip() or 'y'
 
-        p_total = max(float(self.load_df['p_mw'].sum()), 0.01)
+        bess, pv, load = [], [], []
+        
+        
+        if not interactive:
+            # Automatische Logik
+            def get_bus(idx, offset=0):
+                return int(leaf_nodes[(idx + offset) % len(leaf_nodes)])
 
-        # BESS: 40 % of total network load, 8-h energy capacity
-        top_bus = int(load_df_sorted.iloc[0]['bus'])
-        bess_s  = round(max(p_total * 0.40, 0.005), 5)
-        bess = [{"bus": top_bus,
-                 "S_max_MW":  bess_s,
-                 "E_cap_MWh": bess_s * 8.0,
-                 "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5}]
-
-        # PV: 50 % of total network load at top-4 load buses
-        pv_s = round(max(p_total * 0.50, 0.003), 5)
-        pv = [{"bus": int(load_df_sorted.iloc[i]['bus']),
-               "S_max_MW": pv_s,
-               "pf_min": 0.9}
-              for i in range(min(4, len(load_df_sorted)))]
-
-        # Controllable loads: 50 % of total network load, next 5 buses
-        load_s = round(max(p_total * 0.50, 0.002), 5)
-        load = [{"bus": int(load_df_sorted.iloc[i]['bus']),
-                 "P_max_MW": load_s,
-                 "pf": 0.95, "device_type": "hp"}
-                for i in range(min(4, len(load_df_sorted)), min(9, len(load_df_sorted)))]
+            bess_s = 10.0
+            bess = [{"bus": get_bus(i), "S_max_MW": bess_s, "E_cap_MWh": bess_s * 4.0, 
+                     "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5} for i in range(n_bess)]
+            pv = [{"bus": get_bus(i, offset=n_bess), "S_max_MW": 0.5, "pf_min": 0.9} for i in range(n_pv)]
+            load = [{"bus": get_bus(i, offset=n_bess + n_pv), "P_max_MW": 0.2, "pf": 0.95, "device_type": "hp"} for i in range(n_loads)]
+        else:
+            # Manuelle Eingabe
+            print(f"Verfügbare Bus-Knoten: {sorted(list(G.nodes()))}")
+            
+            for i in range(n_bess):
+                bus = int(input(f"Bus für BESS {i+1}: "))
+                bess.append({"bus": bus, "S_max_MW": 10.0, "E_cap_MWh": 40.0, "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5})
+            
+            for i in range(n_pv):
+                bus = int(input(f"Bus für PV {i+1}: "))
+                pv.append({"bus": bus, "S_max_MW": 0.5, "pf_min": 0.9})
+            
+            for i in range(n_loads):
+                bus = int(input(f"Bus für Load {i+1}: "))
+                load.append({"bus": bus, "P_max_MW": 0.2, "pf": 0.95, "device_type": "hp"})
 
         return bess, pv, load
-
-    # ── Jacobian ──────────────────────────────────────────────────────────────
-
+    
     def build_jacobian(self):
         self.J, self.J_blocks = _build_jacobian(self.bus_df, self.line_df)
         return self.J
 
-    # ── device accessors ──────────────────────────────────────────────────────
+    def get_bess_devices(self): return [BESSModel(**d) for d in self._BESS_DATA]
+    def get_pv_devices(self): return [PVModel(**d) for d in self._PV_DATA]
+    def get_controllable_loads(self): return [ControllableLoadModel(**d) for d in self._LOAD_DATA]
 
-    def get_bess_devices(self):
-        return [BESSModel(**d) for d in self._BESS_DATA]
-
-    def get_pv_devices(self):
-        return [PVModel(**d) for d in self._PV_DATA]
-
-    def get_controllable_loads(self):
-        return [ControllableLoadModel(**d) for d in self._LOAD_DATA]
-
-    # ── baseline time series ──────────────────────────────────────────────────
-
-    def get_baseline(self, date: str = "2021-09-01",
-                     resolution_min: int = 15) -> pd.DataFrame:
+    def get_baseline(self, date: str = "2021-09-01", resolution_min: int = 15) -> pd.DataFrame:
         csv_file = self.data_dir / f"baseline_{date}.csv"
-        if csv_file.exists():
-            return pd.read_csv(csv_file, parse_dates=["time"])
+        if csv_file.exists(): return pd.read_csv(csv_file, parse_dates=["time"])
         return self._synthetic_baseline(date, resolution_min)
 
     def _synthetic_baseline(self, date: str, resolution_min: int) -> pd.DataFrame:
-        n_steps     = 24 * 60 // resolution_min
-        t           = np.linspace(0, 24, n_steps, endpoint=False)
-        irradiance  = np.clip(800 * np.exp(-0.5 * ((t - 12) / 3) ** 2), 0, None)
+        n_steps = 24 * 60 // resolution_min
+        t = np.linspace(0, 24, n_steps, endpoint=False)
+        irradiance = np.clip(800 * np.exp(-0.5 * ((t - 12) / 3) ** 2), 0, None)
         temperature = 15 + 8 * np.sin(2 * np.pi * (t - 6) / 24)
 
         rows = []
         for ti, irr, temp in zip(t, irradiance, temperature):
             row = {"time": ti, "irradiance": irr, "temperature": temp}
-
             for d in self._PV_DATA:
                 b = d["bus"]
                 row[f"bus_{b}_P_pv_base"] = d["S_max_MW"] * irr / 1000.0
                 row[f"bus_{b}_Q_pv_base"] = 0.0
-
             for d in self._LOAD_DATA:
-                b       = d["bus"]
+                b = d["bus"]
                 tan_phi = np.tan(np.arccos(d["pf"]))
-                if d["device_type"] == "hp":
-                    p_hp = d["P_max_MW"] * max(0, (15 - temp) / 23)
-                else:
-                    p_hp = d["P_max_MW"] * 0.3
+                p_hp = d["P_max_MW"] * max(0, (15 - temp) / 23) if d["device_type"] == "hp" else d["P_max_MW"] * 0.3
                 row[f"bus_{b}_P_hp_base"] = p_hp
                 row[f"bus_{b}_Q_hp_base"] = p_hp * tan_phi
-
             rows.append(row)
-
         return pd.DataFrame(rows)
-
-    # ── line / voltage limits ─────────────────────────────────────────────────
 
     @property
     def line_ratings_mva(self) -> np.ndarray:
-        bus_vn     = self.bus_df['vn_kv']
+        bus_vn = self.bus_df['vn_kv']
         from_buses = self.line_df['from_bus'].values
-        v_kv = np.array([bus_vn.at[b] if b in bus_vn.index else 0.4
-                         for b in from_buses], dtype=float)
-        return self.line_df['max_i_ka'].values * v_kv * np.sqrt(3)
+        v_kv = np.array([bus_vn.at[b] if b in bus_vn.index else 0.4 for b in from_buses], dtype=float)
+        max_i = self.line_df['max_i_ka'].fillna(0.2).values
+        ratings = max_i * v_kv * np.sqrt(3)
+        lengths = self.line_df['length_km'].values
+        ratings[lengths <= 0.05] = 999.0
+        return ratings
 
     @property
-    def v_limits(self) -> tuple:
-        """Voltage band for linearised constraints (widened to absorb flat-start error)."""
-        return (0.85, 1.15)
+    def v_limits(self) -> tuple: return (0.90, 1.10)

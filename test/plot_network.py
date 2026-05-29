@@ -72,7 +72,7 @@ def _get_bus_positions(grid, root_directory):
     return {}
 
 
-def plot_network(save_path: Path = None, show: bool = False):
+def plot_network(save_path: Path = None, show: bool = False, new_line: tuple = None):
     root_directory = Path(__file__).resolve().parent.parent
     grid = WasterkingenGrid(data_dir=root_directory)
 
@@ -83,6 +83,7 @@ def plot_network(save_path: Path = None, show: bool = False):
 
     # Draw lines (edges)
     if hasattr(grid, "line_df") and grid.line_df is not None:
+        added_new_line_label = False
         for _, row in grid.line_df.iterrows():
             u_col = "from_bus" if "from_bus" in row else row.index[0]
             v_col = "to_bus" if "to_bus" in row else row.index[1]
@@ -90,7 +91,31 @@ def plot_network(save_path: Path = None, show: bool = False):
             if u in pos and v in pos:
                 x0, y0 = pos[u]
                 x1, y1 = pos[v]
-                ax.plot([x0, x1], [y0, y1], color="#333333", linewidth=1.5, zorder=1)
+                
+                # Check if this is our highlighted new line
+                is_new = False
+                if new_line and ((u, v) == new_line or (v, u) == new_line):
+                    is_new = True
+                # Fallback: check if the dataframe explicitly holds a candidate
+                elif "name" in row and isinstance(row["name"], str) and row["name"].startswith("Cand_"):
+                    is_new = True
+
+                if is_new:
+                    # Draw thick red dashed line
+                    label = "Optimal New Line" if not added_new_line_label else None
+                    ax.plot([x0, x1], [y0, y1], color="#e41a1c", linewidth=3.5, linestyle="--", zorder=4, label=label)
+                    added_new_line_label = True
+                else:
+                    # Draw standard grey line
+                    ax.plot([x0, x1], [y0, y1], color="#333333", linewidth=1.5, zorder=1)
+                    
+    # If the new line wasn't in the dataframe but was passed manually, draw it directly
+    if new_line and not added_new_line_label:
+        u, v = new_line
+        if u in pos and v in pos:
+            x0, y0 = pos[u]
+            x1, y1 = pos[v]
+            ax.plot([x0, x1], [y0, y1], color="#e41a1c", linewidth=3.5, linestyle="--", zorder=4, label="Optimal New Line")
 
     # Draw buses
     bus_x = []
@@ -189,15 +214,21 @@ def plot_network(save_path: Path = None, show: bool = False):
         except Exception:
             continue
 
-    ax.set_title("Wasterkingen Grid: buses, lines and devices", fontsize=12, weight='bold')
+    ax.set_title("Wasterkingen Grid: Baseline & Optimal Upgrade", fontsize=12, weight='bold')
     ax.set_aspect("equal", adjustable="datalim")
     ax.grid(True, linestyle=':', alpha=0.5)
+    
+    # Add Legend to explain the new line
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        ax.legend(loc="upper right", framealpha=0.9)
+
     fig.tight_layout()
 
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(save_path, dpi=150)
-        print(f"Saved: {save_path}")
+        print(f"  Saved: {save_path}")
     if show:
         plt.show()
     plt.close(fig)

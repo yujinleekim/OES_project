@@ -1,128 +1,79 @@
 """
-FFOR (Feasible Flexibility Operating Region) Computation
-for the Wasterkingen Distribution Grid
- 
-Based on:
-  "On the Flexibility Potential of a Swiss Distribution Grid:
-   Opportunities and Limitations" (Brändle et al., 2025)
- 
-Group: Kim, Ng, Laser
-Course: Optimization in Energy Systems 2026, ETH Zürich
+FFOR Computation – main.py
 """
- 
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
- 
+
+# Eigene Module
 from grid_model import WasterkingenGrid
-from devices import BESSModel, PVModel, ControllableLoadModel
 from ffor_optimizer import FFOROptimizer
 from utils import plot_ffor, plot_ffor_multi_duration
 from line_add import find_optimal_line_addition, plot_ffor_comparison
- 
-# ── paths ────────────────────────────────────────────────────────────────────
-DATA_DIR = Path(__file__).parent.parent   # project root, where 70-1_0_4_grid.xlsx lives
+
+DATA_DIR = Path(__file__).parent.parent
 OUTPUT_DIR = Path("results")
 OUTPUT_DIR.mkdir(exist_ok=True)
- 
- 
+
 def main():
     print("=" * 60)
     print("FFOR Computation – Wasterkingen Distribution Grid")
     print("=" * 60)
- 
-    # ── 1. Load grid ─────────────────────────────────────────────
-    print("\n[1/4] Loading grid topology ...")
+    
+    # 1. Grid laden
     grid = WasterkingenGrid(data_dir=DATA_DIR)
+    grid._BESS_DATA, grid._PV_DATA, grid._LOAD_DATA = grid._make_device_data(n_bess=1, n_pv=12, n_loads=5)
     grid.build_jacobian()
-    print(f"      Nodes  : {grid.n_buses}")
-    print(f"      Lines  : {grid.n_lines}")
-    print(f"      PCC bus: {grid.pcc_bus}")
- 
-    # ── 2. Instantiate flexible devices ──────────────────────────
-    print("\n[2/4] Setting up flexible devices ...")
+    
+    # 2. Geräte laden
     bess_list = grid.get_bess_devices()
     pv_list   = grid.get_pv_devices()
     load_list = grid.get_controllable_loads()
-    print(f"      BESS  : {len(bess_list)} units")
-    print(f"      PV    : {len(pv_list)} units")
-    print(f"      Loads : {len(load_list)} units")
- 
-    # ── 3. Load time-series baseline ─────────────────────────────
-    print("\n[3/4] Loading baseline time series ...")
-    baseline = grid.get_baseline(
-        date="2021-09-01",
-        resolution_min=15,
-    )
-    print(f"      Timesteps: {len(baseline)}")
- 
-    # ── 4. Compute FFOR ──────────────────────────────────────────
-    print("\n[4/4] Computing FFOR ...")
+    baseline  = grid.get_baseline(date="2021-09-01", resolution_min=15)
+
+    # 3. FFOR für den Ist-Zustand berechnen
     optimizer = FFOROptimizer(grid, bess_list, pv_list, load_list)
- 
-    # --- single-timestep FFOR at 14:00 ---
-    t_idx = 14 * 4          # 14:00 with 15-min resolution → index 56
-    ffor_single = optimizer.compute_ffor_single_timestep(
-        t_idx=t_idx,
-        baseline=baseline,
-        n_directions=36,    # 10° increments
-    )
- 
-    # --- multi-timestep FFOR for several sustained durations ---
-    durations_h = [0.25, 0.5, 1, 2, 4, 8]
-    ffor_multi = {}
-    for d in durations_h:
-        print(f"   Duration {d} h ...")
-        ffor_multi[d] = optimizer.compute_ffor_multi_timestep(
-            t_start=t_idx,
-            duration_h=d,
-            baseline=baseline,
-            n_directions=36,
-        )
-    
-    # ── 5. Find optimal new line ──────────────────────────────────
+    t_idx = 56
+    ffor_single = optimizer.compute_ffor_single_timestep(t_idx=t_idx, baseline=baseline, n_directions=36)
+
+    # 4. Optimierung: Beste zusätzliche Leitung finden (MUSS VOR PLOTTING SEIN)
     print("\n[5/5] Searching for optimal line addition ...")
     line_result = find_optimal_line_addition(
-        grid           = grid,
-        bess_list      = bess_list,
-        pv_list        = pv_list,
-        load_list      = load_list,
-        baseline       = baseline,
-        t_idx          = t_idx,
-        n_directions   = 36,
-        length_km      = 0.1,      # assumed cable length [km]
-        top_bus_count  = 20,       # evaluate only the 20 most significant buses first
-        verbose        = True,
-    )
- 
-    best_bus_i, best_bus_j = line_result["best_pair"]
-    print(f"\n  → Best new line: bus {best_bus_i} ↔ bus {best_bus_j}")
-    print(f"    FFOR area gain: {line_result['area_gain']:+.6f} MW·MVAr "
-          f"({line_result['area_gain_pct']:+.1f} %)")
-    
-    # ── Plots ─────────────────────────────────────────────────────
-    print("\nPlotting results ...")
-    plot_ffor(
-        ffor_single,
-        title="Single-Timestep FFOR – Wasterkingen, 01-Sep-2021 14:00",
-        save_path=OUTPUT_DIR / "ffor_single.png",
-    )
-    plot_ffor_multi_duration(
-        ffor_multi,
-        title="Multi-Timestep FFOR – Wasterkingen, 01-Sep-2021 14:00",
-        save_path=OUTPUT_DIR / "ffor_multi.png",
+        grid=grid, bess_list=bess_list, pv_list=pv_list, load_list=load_list, 
+        baseline=baseline, t_idx=t_idx, n_directions=36, length_km=0.5, top_n=20, verbose=True
     )
     
-    plot_ffor_comparison(
-        base_ffor  = ffor_single,
-        opt_ffor   = line_result["best_ffor"],
-        best_pair  = line_result["best_pair"],
-        save_path  = OUTPUT_DIR / "ffor_line_comparison.png",
-    )
- 
-    print(f"\nDone. Figures saved to '{OUTPUT_DIR}/'")
+    # 5. Plotting-Teil
+    print("\nGenerating plots ...")
     
- 
+    # Single Plot
+    if len(ffor_single.P_flex) > 3:
+        plot_ffor(ffor_single, title="Single-Timestep FFOR", save_path=OUTPUT_DIR / "ffor_single.png")
+
+    # Multi-Duration Plot
+    durations_h = [0.25, 0.5, 1, 2]
+    multi_results = {d: optimizer.compute_ffor_multi_timestep(t_start=t_idx, duration_h=d, baseline=baseline, n_directions=36) 
+                     for d in durations_h}
+    plot_ffor_multi_duration(multi_results, save_path=OUTPUT_DIR / "ffor_multi.png")
+    
+    # Vorher-Nachher Vergleich
+    if line_result and "best_ffor" in line_result:
+        # Hier muss der Funktionsname mit dem Import übereinstimmen!
+        plot_ffor_comparison(
+            base_ffor=ffor_single, 
+            opt_ffor=line_result["best_ffor"], 
+            best_pair=line_result["best_pair"],
+            save_path=OUTPUT_DIR / "ffor_comparison.png"
+        )
+        print("[DEBUG] Comparison plot saved.")
+        # Ausgabe des Ergebnisses
+        best_bus_i, best_bus_j = line_result["best_pair"]
+        print(f"\n  → Best new line: bus {best_bus_i} ↔ bus {best_bus_j}")
+        print(f"    FFOR area gain: {line_result['area_gain']:+.6f} MW·MVAr")
+
+    print(f"\nDone. All figures saved to '{OUTPUT_DIR}/'")
+
 if __name__ == "__main__":
     main()
