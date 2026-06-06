@@ -83,37 +83,37 @@ class WasterkingenGrid:
         if not leaf_nodes: 
             leaf_nodes = [n for n in G.nodes() if n != self.pcc_bus] or [self.pcc_bus]
 
-        # Statt einfach nur alle Leaves zu nehmen:
+        # Sort leaves by distance from PCC (farthest first)
         leaf_nodes = sorted(leaf_nodes, key=lambda x: nx.shortest_path_length(G, x, self.pcc_bus), reverse=True)
-        print(f"\n--- Geräte-Konfiguration ---")
-        mode = input(f"Automatische Platzierung wählen? (y/n) [Standard: y]: ").lower().strip() or 'y'
+        print(f"\n--- Device Configuration ---")
+        mode = input("Automatic placement? (y/n) [default: y]: ").lower().strip() or 'y'
 
         bess, pv, load = [], [], []
 
         if mode == 'y':
-            # Automatische Logik
+            # Automatic placement
             def get_bus(idx, offset=0):
                 return int(leaf_nodes[(idx + offset) % len(leaf_nodes)])
 
             bess_s = 10.0
-            bess = [{"bus": get_bus(i), "S_max_MW": bess_s, "E_cap_MWh": bess_s * 4.0, 
+            bess = [{"bus": get_bus(i), "S_max_MW": bess_s, "E_cap_MWh": bess_s * 4.0,
                      "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5} for i in range(n_bess)]
             pv = [{"bus": get_bus(i, offset=n_bess), "S_max_MW": 0.5, "pf_min": 0.9} for i in range(n_pv)]
             load = [{"bus": get_bus(i, offset=n_bess + n_pv), "P_max_MW": 0.2, "pf": 0.95, "device_type": "hp"} for i in range(n_loads)]
         else:
-            # Manuelle Eingabe
-            print(f"Verfügbare Bus-Knoten: {sorted(list(G.nodes()))}")
-            
+            # Manual input
+            print(f"Available buses: {sorted(list(G.nodes()))}")
+
             for i in range(n_bess):
-                bus = int(input(f"Bus für BESS {i+1}: "))
+                bus = int(input(f"Bus for BESS {i+1}: "))
                 bess.append({"bus": bus, "S_max_MW": 10.0, "E_cap_MWh": 40.0, "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5})
-            
+
             for i in range(n_pv):
-                bus = int(input(f"Bus für PV {i+1}: "))
+                bus = int(input(f"Bus for PV {i+1}: "))
                 pv.append({"bus": bus, "S_max_MW": 0.5, "pf_min": 0.9})
-            
+
             for i in range(n_loads):
-                bus = int(input(f"Bus für Load {i+1}: "))
+                bus = int(input(f"Bus for Load {i+1}: "))
                 load.append({"bus": bus, "P_max_MW": 0.2, "pf": 0.95, "device_type": "hp"})
 
         return bess, pv, load

@@ -1,5 +1,5 @@
 """
-utils.py - Bereinigte und robuste Plotting-Hilfsfunktionen
+utils.py - Plotting helper functions
 """
 
 import numpy as np
@@ -12,25 +12,22 @@ def _close_polygon(P, Q):
     return np.append(P, P[0]), np.append(Q, Q[0])
 
 def _convex_hull_order(P, Q):
-    """
-    Sortiert die Punkte im Uhrzeigersinn nach ihrem Polarwinkel um den Schwerpunkt.
-    Das ist extrem robust und verhindert kollabierte, weiße Plots bei flachen Polygonen.
-    """
+    """Sort points by polar angle around centroid for correct polygon rendering."""
     mask = ~(np.isnan(P) | np.isnan(Q))
     P_clean = P[mask]
     Q_clean = Q[mask]
-    
+
     if len(P_clean) < 3:
         return P_clean, Q_clean
-        
-    # Schwerpunkt (Center of Mass) berechnen
+
+    # Compute centroid
     p_center = np.mean(P_clean)
     q_center = np.mean(Q_clean)
-    
-    # Polarwinkel aller Punkte relativ zum Schwerpunkt berechnen
+
+    # Compute polar angles relative to centroid
     angles = np.arctan2(Q_clean - q_center, P_clean - p_center)
-    
-    # Punkte nach Winkel sortieren
+
+    # Sort points by angle
     sort_idx = np.argsort(angles)
     return P_clean[sort_idx], Q_clean[sort_idx]
 
@@ -44,12 +41,10 @@ def plot_ffor(result, title: str = "FFOR", save_path: Path = None):
 
     fig, ax = plt.subplots(figsize=(7, 7))
     
-    # Hier zeichnen wir die Fläche
     ax.fill(P, Q, alpha=0.3, color="steelblue", label="FFOR Area")
     ax.plot(P, Q, "b-", linewidth=2.0)
-    
-    # WICHTIG: Manuelles Setzen der Limits basierend auf den Daten
-    margin = 0.1 # 10% Rand
+
+    margin = 0.1
     ax.set_xlim(min(P) - margin, max(P) + margin)
     ax.set_ylim(min(Q) - margin, max(Q) + margin)
     
@@ -138,25 +133,23 @@ def plot_active_flex_vs_duration(ffor_multi: dict, save_path: Path = None):
 
 
 def plot_ffor_multi_duration(ffor_results, save_path=None):
-    """
-    ffor_results: Dict mit Key=Dauer (z.B. 0.5, 1, 2, 4) und Value=FFOR-Objekt
-    """
+    """ffor_results: dict with key=duration (e.g. 0.5, 1, 2, 4) and value=FFORResult"""
     fig, ax = plt.subplots(figsize=(8, 8))
     colors = plt.cm.viridis(np.linspace(0, 0.8, len(ffor_results)))
-    
+
     for i, (duration, res) in enumerate(ffor_results.items()):
         P, Q = _convex_hull_order(res.P_flex, res.Q_flex)
         P, Q = _close_polygon(P, Q)
-        ax.plot(P, Q, color=colors[i], linewidth=2.0, label=f"Dauer: {duration}h")
-    
+        ax.plot(P, Q, color=colors[i], linewidth=2.0, label=f"Duration: {duration}h")
+
     ax.axhline(0, color="k", linestyle="--", linewidth=0.5)
     ax.axvline(0, color="k", linestyle="--", linewidth=0.5)
     ax.set_xlabel("Active Power Flexibility [MW]")
     ax.set_ylabel("Reactive Power Flexibility [MVAr]")
-    ax.set_title("Einfluss der Entladedauer auf die FFOR")
+    ax.set_title("Effect of Sustained Duration on FFOR")
     ax.legend()
     ax.grid(True, alpha=0.3)
-    
+
     if save_path: fig.savefig(save_path, dpi=200)
     plt.close(fig)
 
@@ -241,24 +234,22 @@ def plot_ffor_area_vs_capacity(capacity_results: dict, base_area: float = None,
     plt.close(fig)
 
 
-def plot_ffor_comparison_full(base_ffor, opt_ffor, label_opt="Mit Netzausbau", save_path=None):
+def plot_ffor_comparison_full(base_ffor, opt_ffor, label_opt="With new line", save_path=None):
     fig, ax = plt.subplots(figsize=(7, 7))
-    
-    # Baseline (Blau)
+
     P_b, Q_b = _close_polygon(*_convex_hull_order(base_ffor.P_flex, base_ffor.Q_flex))
     ax.fill(P_b, Q_b, color="steelblue", alpha=0.2, label="Baseline FFOR")
     ax.plot(P_b, Q_b, color="steelblue", linewidth=2)
-    
-    # Opt (Rot)
+
     P_o, Q_o = _close_polygon(*_convex_hull_order(opt_ffor.P_flex, opt_ffor.Q_flex))
     ax.fill(P_o, Q_o, color="tomato", alpha=0.2, label=label_opt)
     ax.plot(P_o, Q_o, color="tomato", linewidth=2)
-    
-    ax.set_title("FFOR Vorher-Nachher Vergleich")
+
+    ax.set_title("FFOR Before/After Comparison")
     ax.set_xlabel("P_flex [MW]")
     ax.set_ylabel("Q_flex [MVAr]")
     ax.legend()
     ax.grid(True, alpha=0.3)
-    
+
     if save_path: fig.savefig(save_path, dpi=200)
     plt.close(fig)

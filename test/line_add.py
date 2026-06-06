@@ -250,7 +250,6 @@ def compute_ffor_capacity_sweep(grid, bess_list, pv_list, load_list,
 
 
 def plot_ffor_comparison(base_ffor, opt_ffor, best_pair, save_path=None):
-    # ... (dein Plotting Code) ...
     from utils import _convex_hull_order, _close_polygon
     fig, ax = plt.subplots(figsize=(7, 7))
 
