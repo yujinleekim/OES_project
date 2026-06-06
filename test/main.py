@@ -73,6 +73,7 @@ def main():
         print(f"\n  → Best new line: bus {best_bus_i} ↔ bus {best_bus_j}")
         print(f"    FFOR area gain: {line_result['area_gain']:+.6f} MW·MVAr")
         plot_network(
+            grid=grid,
             new_line=line_result["best_pair"],
             save_path=OUTPUT_DIR / "network_map.png",
         )

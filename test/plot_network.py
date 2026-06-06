@@ -72,9 +72,11 @@ def _get_bus_positions(grid, root_directory):
     return {}
 
 
-def plot_network(save_path: Path = None, show: bool = False, new_line: tuple = None):
+def plot_network(save_path: Path = None, show: bool = False, new_line: tuple = None, grid=None):
     root_directory = Path(__file__).resolve().parent.parent
-    grid = WasterkingenGrid(data_dir=root_directory)
+    if grid is None:
+        grid = WasterkingenGrid(data_dir=root_directory)
+        grid._BESS_DATA, grid._PV_DATA, grid._LOAD_DATA = grid._make_device_data()
 
     # Pass root_directory into the position engine to enable the manual file reader bypass
     pos = _get_bus_positions(grid, root_directory)
