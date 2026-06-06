@@ -104,9 +104,8 @@ class ShadowPriceScorer(FFOROptimizer):
                     
         if valid_angles > 0:
             for pair in pair_scores: pair_scores[pair] /= valid_angles
-                
-        ranked = sorted(pair_scores.items(), key=lambda x: x[1], reverse=True)
-        return [pair for pair, score in ranked]
+
+        return pair_scores
 
 def _ffor_area(P: np.ndarray, Q: np.ndarray) -> float:
     mask = ~(np.isnan(P) | np.isnan(Q))
@@ -143,6 +142,53 @@ def _candidate_pairs(bus_df: pd.DataFrame, line_df: pd.DataFrame, min_hops: int 
             candidates.append((u, v))
     return candidates
 
+def _normalize_scores(scores: dict) -> dict:
+    vals = np.array(list(scores.values()), dtype=float)
+    lo, hi = vals.min(), vals.max()
+    span = hi - lo
+    if span < 1e-12:
+        return {k: 1.0 for k in scores}
+    return {k: (v - lo) / span for k, v in scores.items()}
+
+def _device_proximity_weights(line_df: pd.DataFrame, candidates: list, device_buses: set, decay_hops: float = 10.0) -> dict:
+    """Score each candidate pair by electrical (hop-distance) closeness to buses
+    hosting flexible PV/BESS/Load devices, so that the ranking responds to where
+    those devices actually sit rather than only to network topology."""
+    import networkx as nx
+    G = nx.Graph()
+    for _, row in line_df.iterrows():
+        G.add_edge(int(row['from_bus']), int(row['to_bus']))
+
+    if not device_buses:
+        return {pair: 1.0 for pair in candidates}
+
+    lengths = dict(nx.all_pairs_shortest_path_length(G))
+    weights = {}
+    for (u, v) in candidates:
+        d_u = min((lengths.get(u, {}).get(db, np.inf) for db in device_buses), default=np.inf)
+        d_v = min((lengths.get(v, {}).get(db, np.inf) for db in device_buses), default=np.inf)
+        nearest = min(d_u, d_v)
+        weights[(u, v)] = float(np.exp(-nearest / decay_hops))
+    return weights
+
+def _bus_geo_positions(grid: WasterkingenGrid) -> dict:
+    """Real geographic bus coordinates (meters, Swiss LV95) read from the grid Excel sheet.
+    Returns {} if the sheet is unavailable, so callers can fall back to a default length."""
+    excel_path = grid.data_dir / "70-1_0_4_grid.xlsx"
+    try:
+        geo_df = pd.read_excel(excel_path, sheet_name="bus_geodata", index_col=0, engine="openpyxl")
+        return {int(idx): (float(row["x"]), float(row["y"])) for idx, row in geo_df.iterrows()}
+    except Exception:
+        return {}
+
+def _geo_length_km(bus_pos: dict, bus_i: int, bus_j: int, fallback_km: float) -> float:
+    """Straight-line distance between two buses in km (matches how existing line_km values
+    in this dataset are derived from bus_geodata), falling back when geodata is missing."""
+    if bus_i not in bus_pos or bus_j not in bus_pos:
+        return fallback_km
+    (x1, y1), (x2, y2) = bus_pos[bus_i], bus_pos[bus_j]
+    return float(np.hypot(x1 - x2, y1 - y2) / 1000.0)
+
 def _median_line_params(line_df: pd.DataFrame) -> dict:
     return {
         "r_ohm_per_km": float(np.median(line_df['r_ohm_per_km'])),
@@ -174,15 +220,34 @@ def find_optimal_line_addition(
 
     all_candidates = _candidate_pairs(grid.bus_df, line_df_orig, min_hops=8)
     scorer = ShadowPriceScorer(grid, bess_list, pv_list, load_list)
-    ranked_candidates = scorer.rank_candidates_by_shadow_price(all_candidates, t_idx, baseline, n_directions)
+    shadow_scores = scorer.rank_candidates_by_shadow_price(all_candidates, t_idx, baseline, n_directions)
+
+    # Blend structural electrical significance with closeness to where the
+    # flexible PV/BESS/Load devices actually sit, so the chosen location moves
+    # when device placement changes instead of always favoring the structurally
+    # most "extreme" pair (e.g. PCC <-> farthest leaf bus).
+    device_buses = {d.bus for d in (bess_list + pv_list + load_list)}
+    proximity_weights = _device_proximity_weights(line_df_orig, all_candidates, device_buses)
+    norm_shadow = _normalize_scores(shadow_scores)
+    norm_proximity = _normalize_scores(proximity_weights)
+    combined_scores = {pair: 0.5 * norm_shadow[pair] + 0.5 * norm_proximity[pair] for pair in all_candidates}
+
+    ranked_candidates = sorted(combined_scores, key=combined_scores.get, reverse=True)
     candidates = ranked_candidates[:top_n]
 
     if line_params is None: line_params = _median_line_params(line_df_orig)
     results = []
-    
+
+    # Use each candidate's real geographic distance (matches how length_km is derived
+    # for existing lines in this dataset) instead of one fixed length for every pair --
+    # otherwise a PCC<->far-leaf "shortcut" looks just as short/cheap as a local link,
+    # which artificially favors long-distance candidates.
+    bus_pos = _bus_geo_positions(grid)
+
     for idx, (bus_i, bus_j) in enumerate(candidates):
+        cand_length_km = _geo_length_km(bus_pos, bus_i, bus_j, fallback_km=length_km)
         line_df_cand = line_df_orig.copy()
-        _add_candidate_line(line_df_cand, bus_i, bus_j, length_km, line_params)
+        _add_candidate_line(line_df_cand, bus_i, bus_j, cand_length_km, line_params)
         grid.line_df, grid.n_lines = line_df_cand, len(line_df_cand)
         grid.build_jacobian()
 
@@ -193,7 +258,7 @@ def find_optimal_line_addition(
         except Exception:
             area, ffor = 0.0, None
 
-        results.append({"bus_i": bus_i, "bus_j": bus_j, "area": area, "ffor": ffor})
+        results.append({"bus_i": bus_i, "bus_j": bus_j, "area": area, "ffor": ffor, "length_km": cand_length_km})
 
     grid.line_df, grid.n_lines = line_df_orig, len(line_df_orig)
     grid.build_jacobian()
@@ -207,7 +272,7 @@ def find_optimal_line_addition(
 
     return {
         "best_pair": (best["bus_i"], best["bus_j"]), "best_ffor": best["ffor"],
-        "best_area": best_area, "base_area": base_area,
+        "best_area": best_area, "base_area": base_area, "best_length_km": best["length_km"],
         "area_gain": gain, "area_gain_pct": gain_pct,
         "all_results": results,
     }

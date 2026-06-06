@@ -87,7 +87,7 @@ def main():
         cap_results = compute_ffor_capacity_sweep(
             grid=grid, bess_list=bess_list, pv_list=pv_list, load_list=load_list,
             baseline=baseline, bus_i=best_bus_i, bus_j=best_bus_j,
-            capacities_ka=capacities, length_km=0.5, t_idx=t_idx, n_directions=36,
+            capacities_ka=capacities, length_km=line_result["best_length_km"], t_idx=t_idx, n_directions=36,
         )
 
         plot_ffor_capacity_overlay(
