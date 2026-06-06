@@ -12,6 +12,7 @@ from grid_model import WasterkingenGrid
 from ffor_optimizer import FFOROptimizer
 from utils import plot_ffor, plot_ffor_multi_duration
 from line_add import find_optimal_line_addition, plot_ffor_comparison
+from plot_network import plot_network
 
 DATA_DIR = Path(__file__).parent.parent
 OUTPUT_DIR = Path("results")
@@ -72,6 +73,10 @@ def main():
         best_bus_i, best_bus_j = line_result["best_pair"]
         print(f"\n  → Best new line: bus {best_bus_i} ↔ bus {best_bus_j}")
         print(f"    FFOR area gain: {line_result['area_gain']:+.6f} MW·MVAr")
+        plot_network(
+            new_line=line_result["best_pair"],ㅛ
+            save_path=OUTPUT_DIR / "network_map.png",
+        )
 
     print(f"\nDone. All figures saved to '{OUTPUT_DIR}/'")
 

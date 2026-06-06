@@ -37,7 +37,7 @@ def _build_jacobian(bus_df: pd.DataFrame, line_df: pd.DataFrame):
     return J, {"JPt": JPt, "JPU": JPU, "JQt": JQt, "JQU": JQU}
 
 class WasterkingenGrid:
-    def __init__(self, data_dir: Path = Path(__file__).parent.parent, interactive=False):
+    def __init__(self, data_dir: Path = Path(__file__).parent.parent):
         self.data_dir = Path(data_dir)
         self.bus_df, self.line_df, self.load_df, self.ext_grid_df = self._load_dataframes()
         self.pcc_bus = int(self.ext_grid_df['bus'].iloc[0])
@@ -60,7 +60,7 @@ class WasterkingenGrid:
         self.n_buses = len(self.bus_df)
         self.n_lines = len(self.line_df)
         self.J, self.J_blocks = None, None
-        self._BESS_DATA, self._PV_DATA, self._LOAD_DATA = self._make_device_data(interactive=interactive)
+        self._BESS_DATA, self._PV_DATA, self._LOAD_DATA = [], [], []
 
     def bus_pos(self, bus_idx: int) -> int: return self.bus_df.index.get_loc(bus_idx)
     @property
@@ -73,7 +73,7 @@ class WasterkingenGrid:
         if 'in_service' in line_df.columns: line_df = line_df[line_df['in_service'] == True].copy()
         return bus_df, line_df, load_df, ext_grid_df
 
-    def _make_device_data(self, n_bess=2, n_pv=10, n_loads=20, interactive=False):
+    def _make_device_data(self, n_bess=2, n_pv=10, n_loads=20):
         import networkx as nx
         G = nx.Graph()
         for _, r in self.line_df.iterrows(): 
@@ -89,9 +89,8 @@ class WasterkingenGrid:
         mode = input(f"Automatische Platzierung wählen? (y/n) [Standard: y]: ").lower().strip() or 'y'
 
         bess, pv, load = [], [], []
-        
-        
-        if not interactive:
+
+        if mode == 'y':
             # Automatische Logik
             def get_bus(idx, offset=0):
                 return int(leaf_nodes[(idx + offset) % len(leaf_nodes)])
