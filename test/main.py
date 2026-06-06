@@ -11,8 +11,9 @@ from pathlib import Path
 from grid_model import WasterkingenGrid
 from ffor_optimizer import FFOROptimizer
 from utils import plot_ffor, plot_ffor_multi_duration
-from line_add import find_optimal_line_addition, plot_ffor_comparison
+from line_add import find_optimal_line_addition, plot_ffor_comparison, compute_ffor_capacity_sweep
 from plot_network import plot_network
+from utils import plot_ffor_capacity_overlay, plot_ffor_area_vs_capacity
 
 DATA_DIR = Path(__file__).parent.parent
 OUTPUT_DIR = Path("results")
@@ -74,8 +75,30 @@ def main():
         print(f"\n  → Best new line: bus {best_bus_i} ↔ bus {best_bus_j}")
         print(f"    FFOR area gain: {line_result['area_gain']:+.6f} MW·MVAr")
         plot_network(
-            new_line=line_result["best_pair"],ㅛ
+            new_line=line_result["best_pair"],
             save_path=OUTPUT_DIR / "network_map.png",
+        )
+
+        # Capacity sweep at fixed best location
+        print("\n[6/6] Capacity sweep at optimal line location ...")
+        from line_add import _median_line_params
+        median_cap = _median_line_params(grid.line_df)["max_i_ka"]
+        capacities = [median_cap * f for f in [0.25, 0.5, 1.0, 2.0, 4.0]]
+
+        cap_results = compute_ffor_capacity_sweep(
+            grid=grid, bess_list=bess_list, pv_list=pv_list, load_list=load_list,
+            baseline=baseline, bus_i=best_bus_i, bus_j=best_bus_j,
+            capacities_ka=capacities, length_km=0.5, t_idx=t_idx, n_directions=36,
+        )
+
+        plot_ffor_capacity_overlay(
+            cap_results, base_ffor=ffor_single, bus_pair=line_result["best_pair"],
+            save_path=OUTPUT_DIR / "ffor_capacity_overlay.png",
+        )
+        plot_ffor_area_vs_capacity(
+            cap_results, base_area=line_result["base_area"],
+            bus_pair=line_result["best_pair"],
+            save_path=OUTPUT_DIR / "ffor_area_vs_capacity.png",
         )
 
     print(f"\nDone. All figures saved to '{OUTPUT_DIR}/'")

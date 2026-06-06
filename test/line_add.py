@@ -12,7 +12,7 @@ from scipy.spatial import ConvexHull
 
 from grid_model import WasterkingenGrid, _build_jacobian
 from devices import BESSModel, PVModel, ControllableLoadModel
-from ffor_optimizer import FFOROptimizer
+from ffor_optimizer import FFOROptimizer, FFORResult
 from utils import plot_ffor
 
 import gurobipy as gp
@@ -212,7 +212,43 @@ def find_optimal_line_addition(
         "all_results": results,
     }
 
-# In OES_project-3/test/line_add.py
+def compute_ffor_capacity_sweep(grid, bess_list, pv_list, load_list,
+                                baseline, bus_i, bus_j, capacities_ka,
+                                length_km=0.5, t_idx=56, n_directions=36):
+    """
+    Fixed bus pair (bus_i, bus_j)에 대해 max_i_ka를 바꿔가며 FFOR 계산.
+    Returns dict: {cap_ka: FFORResult}
+    """
+    line_df_orig = grid.line_df.copy()
+    base_params  = _median_line_params(line_df_orig)
+
+    results = {}
+    for cap in capacities_ka:
+        line_params = {**base_params, "max_i_ka": cap}
+        line_df_cand = line_df_orig.copy()
+        _add_candidate_line(line_df_cand, bus_i, bus_j, length_km, line_params)
+
+        grid.line_df = line_df_cand
+        grid.n_lines = len(line_df_cand)
+        grid.build_jacobian()
+
+        try:
+            opt  = FFOROptimizer(grid, bess_list, pv_list, load_list)
+            ffor = opt.compute_ffor_single_timestep(
+                t_idx=t_idx, baseline=baseline, n_directions=n_directions)
+        except Exception:
+            ffor = FFORResult(np.array([]), np.array([]))
+
+        results[cap] = ffor
+        print(f"  cap={cap:.3f} kA → {len(ffor.P_flex)} boundary points")
+
+    grid.line_df = line_df_orig
+    grid.n_lines = len(line_df_orig)
+    grid.build_jacobian()
+
+    return results
+
+
 def plot_ffor_comparison(base_ffor, opt_ffor, best_pair, save_path=None):
     # ... (dein Plotting Code) ...
     from utils import _convex_hull_order, _close_polygon
