@@ -52,8 +52,8 @@ def plot_ffor(result, title: str = "FFOR", save_path: Path = None):
     ax.axvline(0, color="k", linewidth=0.5, linestyle="--")
     ax.plot(0, 0, "ro", markersize=8, label="Baseline (0,0)")
     
-    ax.set_xlabel("Active Power Flexibility [MW]")
-    ax.set_ylabel("Reactive Power Flexibility [MVAr]")
+    ax.set_xlabel("Active Power Flexibility [pu]")
+    ax.set_ylabel("Reactive Power Flexibility [pu]")
     ax.set_title(title)
     ax.legend(loc="upper right")
     ax.grid(True, linestyle=":", alpha=0.6)
@@ -92,8 +92,8 @@ def plot_ffor_multi_duration(ffor_multi: dict, title: str = "Multi-Timestep FFOR
     ax.axvline(0, color="k", linewidth=0.8, linestyle="--")
     ax.plot(0, 0, "ko", markersize=6)
     
-    ax.set_xlabel("Active Power Flexibility [MW]")
-    ax.set_ylabel("Reactive Power Flexibility [MVAr]")
+    ax.set_xlabel("Active Power Flexibility [pu]")
+    ax.set_ylabel("Reactive Power Flexibility [pu]")
     ax.set_title(title, fontsize=11, fontweight='bold')
     ax.legend(loc="upper right", title="Sustained Duration")
     ax.grid(True, alpha=0.3)
@@ -117,7 +117,7 @@ def plot_active_flex_vs_duration(ffor_multi: dict, save_path: Path = None):
     ax.plot(durations, p_pos, "b-o", linewidth=1.5, label="Positive Flex (+P)")
     ax.plot(durations, p_neg, "r-o", linewidth=1.5, label="Negative Flex (-P)")
     ax.set_xlabel("Sustained Duration [h]")
-    ax.set_ylabel("Active Power Flexibility [MW]")
+    ax.set_ylabel("Active Power Flexibility [pu]")
     ax.set_title("Flexibility Parameter vs. Duration")
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -144,8 +144,8 @@ def plot_ffor_multi_duration(ffor_results, save_path=None):
 
     ax.axhline(0, color="k", linestyle="--", linewidth=0.5)
     ax.axvline(0, color="k", linestyle="--", linewidth=0.5)
-    ax.set_xlabel("Active Power Flexibility [MW]")
-    ax.set_ylabel("Reactive Power Flexibility [MVAr]")
+    ax.set_xlabel("Active Power Flexibility [pu]")
+    ax.set_ylabel("Reactive Power Flexibility [pu]")
     ax.set_title("Effect of Sustained Duration on FFOR")
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -177,8 +177,8 @@ def plot_ffor_capacity_overlay(capacity_results: dict, base_ffor=None,
     ax.axhline(0, color="k", linewidth=0.5, linestyle="--")
     ax.axvline(0, color="k", linewidth=0.5, linestyle="--")
     ax.plot(0, 0, "ko", markersize=5)
-    ax.set_xlabel("Active Power Flexibility [MW]")
-    ax.set_ylabel("Reactive Power Flexibility [MVAr]")
+    ax.set_xlabel("Active Power Flexibility [pu]")
+    ax.set_ylabel("Reactive Power Flexibility [pu]")
     title = f"FFOR by Line Capacity – bus {bus_pair[0]}↔{bus_pair[1]}" if bus_pair else "FFOR by Line Capacity"
     ax.set_title(title, fontweight="bold")
     ax.legend(loc="upper right", title="max_i_ka", fontsize=8)
@@ -219,7 +219,7 @@ def plot_ffor_area_vs_capacity(capacity_results: dict, base_area: float = None,
                    linestyle="--", label=f"Baseline ({base_area:.4f})")
 
     ax.set_xlabel("New Line Capacity [kA]")
-    ax.set_ylabel("FFOR Area [MW·MVAr]")
+    ax.set_ylabel("FFOR Area [pu²]")
     title = f"FFOR Area vs. Line Capacity – bus {bus_pair[0]}↔{bus_pair[1]}" if bus_pair else "FFOR Area vs. Line Capacity"
     ax.set_title(title, fontweight="bold")
     ax.legend()
@@ -246,8 +246,8 @@ def plot_ffor_comparison_full(base_ffor, opt_ffor, label_opt="With new line", sa
     ax.plot(P_o, Q_o, color="tomato", linewidth=2)
 
     ax.set_title("FFOR Before/After Comparison")
-    ax.set_xlabel("P_flex [MW]")
-    ax.set_ylabel("Q_flex [MVAr]")
+    ax.set_xlabel("P_flex [pu]")
+    ax.set_ylabel("Q_flex [pu]")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
