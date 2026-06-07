@@ -95,7 +95,7 @@ class WasterkingenGrid:
             def get_bus(idx, offset=0):
                 return int(leaf_nodes[(idx + offset) % len(leaf_nodes)])
 
-            bess_s = 10.0
+            bess_s = 0.1
             bess = [{"bus": get_bus(i), "S_max_MW": bess_s, "E_cap_MWh": bess_s * 4.0,
                      "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5} for i in range(n_bess)]
             pv = [{"bus": get_bus(i, offset=n_bess), "S_max_MW": 0.5, "pf_min": 0.9} for i in range(n_pv)]
@@ -106,7 +106,7 @@ class WasterkingenGrid:
 
             for i in range(n_bess):
                 bus = int(input(f"Bus for BESS {i+1}: "))
-                bess.append({"bus": bus, "S_max_MW": 10.0, "E_cap_MWh": 40.0, "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5})
+                bess.append({"bus": bus, "S_max_MW": 0.1, "E_cap_MWh": 0.4, "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5})
 
             for i in range(n_pv):
                 bus = int(input(f"Bus for PV {i+1}: "))
