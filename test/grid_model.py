@@ -126,12 +126,10 @@ class WasterkingenGrid:
     def get_pv_devices(self): return [PVModel(**d) for d in self._PV_DATA]
     def get_controllable_loads(self): return [ControllableLoadModel(**d) for d in self._LOAD_DATA]
 
-    def get_baseline(self, date: str = "2021-09-01", resolution_min: int = 15) -> pd.DataFrame:
-        csv_file = self.data_dir / f"baseline_{date}.csv"
-        if csv_file.exists(): return pd.read_csv(csv_file, parse_dates=["time"])
-        return self._synthetic_baseline(date, resolution_min)
+    def get_baseline(self, resolution_min: int = 15) -> pd.DataFrame:
+        return self._synthetic_baseline(resolution_min)
 
-    def _synthetic_baseline(self, date: str, resolution_min: int) -> pd.DataFrame:
+    def _synthetic_baseline(self, resolution_min: int) -> pd.DataFrame:
         n_steps = 24 * 60 // resolution_min
         t = np.linspace(0, 24, n_steps, endpoint=False)
         irradiance = np.clip(800 * np.exp(-0.5 * ((t - 12) / 3) ** 2), 0, None)

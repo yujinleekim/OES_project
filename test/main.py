@@ -33,7 +33,7 @@ def main():
     bess_list = grid.get_bess_devices()
     pv_list   = grid.get_pv_devices()
     load_list = grid.get_controllable_loads()
-    baseline  = grid.get_baseline(date="2021-09-01", resolution_min=15)
+    baseline  = grid.get_baseline()
 
     # 3. Compute baseline FFOR
     optimizer = FFOROptimizer(grid, bess_list, pv_list, load_list)
