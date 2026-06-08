@@ -11,7 +11,8 @@ from pathlib import Path
 from grid_model import WasterkingenGrid
 from ffor_optimizer import FFOROptimizer
 from utils import plot_ffor, plot_ffor_multi_duration
-from line_add import find_optimal_line_addition, plot_ffor_comparison, compute_ffor_capacity_sweep
+from line_add import find_optimal_line_addition, plot_ffor_comparison, compute_ffor_capacity_sweep, \
+                    _add_candidate_line, _ffor_area
 from plot_network import plot_network
 from utils import plot_ffor_capacity_overlay, plot_ffor_area_vs_capacity
 
@@ -70,8 +71,25 @@ def main():
         )
         # Print results
         best_bus_i, best_bus_j = line_result["best_pair"]
-        print(f"\n  → Best new line: bus {best_bus_i} ↔ bus {best_bus_j}")
-        print(f"    FFOR area gain: {line_result['area_gain']:+.6f} pu²")
+        from line_add import _median_line_params
+        line_params = _median_line_params(grid.line_df)
+        best_len    = line_result["best_length_km"]
+
+        print("\n" + "=" * 50)
+        print("  NEW LINE — Optimal Placement (Scenario 2)")
+        print("=" * 50)
+        print(f"  Route          : bus {best_bus_i} ↔ bus {best_bus_j}")
+        print(f"  Length         : {best_len:.4f} km")
+        print(f"  Capacity       : {line_params['max_i_ka']:.4f} kA  ({line_params['max_i_ka'] / 1.4434:.4f} pu)")
+        print(f"  R              : {line_params['r_ohm_per_km'] * best_len:.4f} Ω  ({line_params['r_ohm_per_km']:.4f} Ω/km)")
+        print(f"  X              : {line_params['x_ohm_per_km'] * best_len:.4f} Ω  ({line_params['x_ohm_per_km']:.4f} Ω/km)")
+        print("-" * 50)
+        print("  FFOR Results")
+        print(f"  Base area      : {line_result['base_area']:.6f} pu²")
+        print(f"  New area       : {line_result['best_area']:.6f} pu²")
+        print(f"  Gain (abs)     : {line_result['area_gain']:+.6f} pu²")
+        print(f"  Gain (%)       : {line_result['area_gain_pct']:+.2f}%")
+        print("=" * 50)
         plot_network(
             grid=grid,
             new_line=line_result["best_pair"],
@@ -80,7 +98,6 @@ def main():
 
         # Capacity sweep at fixed best location
         print("\n[6/6] Capacity sweep at optimal line location ...")
-        from line_add import _median_line_params
         median_cap = _median_line_params(grid.line_df)["max_i_ka"]
         capacities = [median_cap * f for f in [0.25, 0.5, 1.0, 2.0, 4.0]]
 
@@ -99,6 +116,34 @@ def main():
             bus_pair=line_result["best_pair"],
             save_path=OUTPUT_DIR / "ffor_area_vs_capacity.png",
         )
+
+        # Multi-duration FFOR comparison: Scenario 1 vs Scenario 2
+        print("\n  Computing multi-duration FFOR for Scenario 2 ...")
+        line_df_orig = grid.line_df.copy()
+        line_df_with = line_df_orig.copy()
+        _add_candidate_line(line_df_with, best_bus_i, best_bus_j, best_len, line_params)
+        grid.line_df, grid.n_lines = line_df_with, len(line_df_with)
+        grid.build_jacobian()
+
+        opt_s2 = FFOROptimizer(grid, bess_list, pv_list, load_list)
+        multi_s2 = {d: opt_s2.compute_ffor_multi_timestep(t_start=t_idx, duration_h=d, baseline=baseline, n_directions=36)
+                    for d in durations_h}
+
+        grid.line_df, grid.n_lines = line_df_orig, len(line_df_orig)
+        grid.build_jacobian()
+
+        print("\n" + "=" * 65)
+        print("  FFOR by Duration: Scenario 1 (base) vs Scenario 2 (new line)")
+        print("=" * 65)
+        print(f"  {'Duration':<10} {'Sc.1 Area (pu²)':<18} {'Sc.2 Area (pu²)':<18} {'Gain (%)'}")
+        print("-" * 65)
+        for d in durations_h:
+            label = f"{d}h" if d >= 1 else f"{int(d*60)}min"
+            a1 = _ffor_area(multi_results[d].P_flex, multi_results[d].Q_flex)
+            a2 = _ffor_area(multi_s2[d].P_flex, multi_s2[d].Q_flex)
+            gain_pct = 100.0 * (a2 - a1) / a1 if a1 > 0 else float("inf")
+            print(f"  {label:<10} {a1:<18.6f} {a2:<18.6f} {gain_pct:+.2f}%")
+        print("=" * 65)
 
     print(f"\nDone. All figures saved to '{OUTPUT_DIR}/'")
 
