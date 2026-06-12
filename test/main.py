@@ -26,6 +26,21 @@ def main():
     print("=" * 60)
     
     # 1. Load grid
+    # -----------------------------------------------------------------------
+    # CASE CONFIGURATION — change these two lines per run:
+    #
+    # Fig 2  (single device, fixed bus):
+    #   n_pv=1, n_bess=0, n_loads=0  — choose 'n' (manual) → enter bus 32 / 84 / 124
+    #   n_pv=0, n_bess=0, n_loads=1  — HP at bus 32 / 84 / 124
+    #   n_pv=0, n_bess=1, n_loads=0  — BESS at bus 32 / 84 / 124
+    #
+    # Case 1 (12PV, 1HP, 1BESS scattered):   n_pv=12, n_loads=1  — choose 'y' (auto)
+    # Case 2 (12PV, 1HP, 1BESS concentrated): n_pv=12, n_loads=1  — choose 'n' (manual) → enter southern buses
+    # Case 3 (27PV, 1HP, 1BESS scattered):   n_pv=27, n_loads=1  — choose 'y' (auto)
+    #
+    # Also update OUTPUT_DIR at the top of main() to match the case name,
+    # e.g. OUTPUT_DIR = Path("results_12PV1HP1BESS")
+    # -----------------------------------------------------------------------
     grid = WasterkingenGrid(data_dir=DATA_DIR)
     grid._BESS_DATA, grid._PV_DATA, grid._LOAD_DATA = grid._make_device_data(n_bess=1, n_pv=12, n_loads=1)
     grid.build_jacobian()
