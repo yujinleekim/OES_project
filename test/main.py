@@ -27,7 +27,7 @@ def main():
     
     # 1. Load grid
     grid = WasterkingenGrid(data_dir=DATA_DIR)
-    grid._BESS_DATA, grid._PV_DATA, grid._LOAD_DATA = grid._make_device_data(n_bess=1, n_pv=12, n_loads=5)
+    grid._BESS_DATA, grid._PV_DATA, grid._LOAD_DATA = grid._make_device_data(n_bess=1, n_pv=12, n_loads=1)
     grid.build_jacobian()
 
     # 2. Load devices
