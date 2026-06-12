@@ -194,8 +194,21 @@ class FFOROptimizer:
             for t in range(T):
                 p = m.addVar(lb=0, ub=ld.P_max, name=f"l{i}P{t}")
                 q = m.addVar(lb=-GRB.INFINITY, ub=GRB.INFINITY, name=f"l{i}Q{t}")
-                ld.add_single_timestep_constraints(m, p, q, P_base=0.0, name=f"l{i}t{t}")
                 Pv.append(p); Qv.append(q)
+            if ld.type == "hp":
+                T_vars = [m.addVar(lb=ld.T_min, ub=ld.T_max, name=f"l{i}T{t}") for t in range(T)]
+                col = f"bus_{ld.bus}_P_hp_base"
+                P_base_series = np.array([
+                    float(baseline.iloc[min(t_start + t, len(baseline) - 1)].get(col, 0.0))
+                    for t in range(T)
+                ])
+                ld.add_multi_timestep_constraints(
+                    m, Pv, Qv, T_vars, P_base_series,
+                    np.full(T, ld.q_heat), dt_h=dt_h, name=f"l{i}"
+                )
+            else:
+                for t in range(T):
+                    ld.add_single_timestep_constraints(m, Pv[t], Qv[t], P_base=0.0, name=f"l{i}t{t}")
             load_Pall.append(Pv); load_Qall.append(Qv)
 
         m.update()

@@ -75,7 +75,7 @@ class PVModel:
         return np.array(P), np.array(Q)
 
 class ControllableLoadModel:
-    def __init__(self, bus: int, P_max_MW: float, pf: float = 0.95, device_type: str = "hp", T_min: float = 19.0, T_max: float = 23.0, T_init: float = 21.0):
+    def __init__(self, bus: int, P_max_MW: float, pf: float = 0.95, device_type: str = "hp", T_min: float = 19.0, T_max: float = 23.0, T_init: float = 21.0, q_heat: float = 2.0):
         self.bus = bus
         self.P_max = P_max_MW
         self.pf = pf
@@ -84,6 +84,7 @@ class ControllableLoadModel:
         self.T_min = T_min
         self.T_max = T_max
         self.T_init = T_init
+        self.q_heat = q_heat
 
     def add_single_timestep_constraints(self, m: gp.Model, P_var, Q_var, P_base: float = 0.0, name: str = "load"):
         m.addConstr(P_var >= 0,        name=f"{name}_P_lower")
@@ -99,9 +100,12 @@ class ControllableLoadModel:
             m.addConstr(P_vars[t] <= self.P_max,  name=f"{name}_P_upper_t{t}")
             m.addConstr(Q_vars[t] == self.tan_phi * P_vars[t], name=f"{name}_pf_t{t}")
             if self.type == "hp" and t < T - 1:
-                P_base = max(P_base_series[t], 1e-6)
-                P_flex = P_vars[t] - P_base
-                m.addConstr(T_vars[t + 1] == T_vars[t] + (P_flex / P_base) * q_heat_series[t] * dt_h, name=f"{name}_T_dyn_t{t}")
+                P_base = P_base_series[t]
+                if P_base > 1e-3:
+                    P_flex = P_vars[t] - P_base
+                    m.addConstr(T_vars[t + 1] == T_vars[t] + (P_flex / P_base) * q_heat_series[t] * dt_h, name=f"{name}_T_dyn_t{t}")
+                else:
+                    m.addConstr(T_vars[t + 1] == T_vars[t], name=f"{name}_T_dyn_t{t}")
                 m.addConstr(T_vars[t] >= self.T_min, name=f"{name}_Tmin_t{t}")
                 m.addConstr(T_vars[t] <= self.T_max, name=f"{name}_Tmax_t{t}")
 
