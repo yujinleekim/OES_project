@@ -1,7 +1,6 @@
 # Impact of Grid Topology on the Flexibility of Wasterkingen's Electrical Grid
 
 **Group:** Li Shan Ng, Yujin Kim, Lucas Laser  
-**Course:** OES 2026 — ETH Zürich
 
 ## Overview
 
