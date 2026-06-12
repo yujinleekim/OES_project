@@ -56,14 +56,14 @@ Before each run, edit the two lines marked in `main.py`:
 
 Each run saves the following plots to `OUTPUT_DIR/`:
 
-| File | Description |
-|---|---|
-| `ffor_single.png` | Single-timestep FFOR (Scenario 1) |
-| `ffor_multi.png` | Multi-duration FFOR: 15 min, 30 min, 1 h, 2 h |
-| `ffor_comparison.png` | FFOR before/after new line (Scenario 2) |
-| `network_map.png` | Grid topology with device locations and new line |
-| `ffor_capacity_overlay.png` | FFOR for different line capacities (Scenario 3) |
-| `ffor_area_vs_capacity.png` | FFOR area vs. line capacity curve (Scenario 3) |
+| File | Description | Report figure |
+|---|---|---|
+| `ffor_single.png` | Single-timestep FFOR | Figure 8 |
+| `ffor_multi.png` | Multi-duration FFOR: 15 min, 30 min, 1 h, 2 h | Figure 2 / Figure 3 |
+| `ffor_comparison.png` | FFOR before/after new line (Scenario 2) | Figure 8 |
+| `network_map.png` | Grid topology with device locations and new line | Figure 5 / 6 / 7 |
+| `ffor_capacity_overlay.png` | FFOR polygons for different line capacities (Scenario 3) | — |
+| `ffor_area_vs_capacity.png` | FFOR area vs. line capacity curve (Scenario 3) | Figure 4 |
 
 ## Project Structure
 
